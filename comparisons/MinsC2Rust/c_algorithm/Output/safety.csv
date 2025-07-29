@@ -1,0 +1,17 @@
+Source,Safe Loc,Safe Ref
+rb-tree,100.00%,94.62%
+arraylist,100.00%,100.00%
+bloom-filter,100.00%,100.00%
+hash-table,100.00%,100.00%
+avl-tree,100.00%,98.25%
+binomial-heap,100.00%,100.00%
+slist,100.00%,88.70%
+binary-heap,100.00%,100.00%
+queue,100.00%,100.00%
+trie,100.00%,86.24%
+set,100.00%,100.00%
+list,100.00%,90.15%
+sortedarray,100.00%,100.00%
+Overall,100.00%,97.88%
+hash-functions,100.00%,100.00%
+compare-functions,100.00%,100.00%

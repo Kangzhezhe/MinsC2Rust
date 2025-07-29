@@ -1,0 +1,8 @@
+Source,LOC,Total LOC,LCov,Rust LOC,Func Count,Max Fn Len,Mean Fn Len
+test-ht,315,315,100.0%,274,16,34,17.8
+test-rgba,374,381,98.2%,256,18,31,12.0
+test-buffer,432,432,100.0%,450,40,34,10.4
+test-urlparser,266,266,100.0%,210,3,194,86.0
+test-bst,276,276,100.0%,181,12,81,22.2
+test-quadtree,332,363,91.5%,459,31,32,10.6
+Overall,1995,2033,98.1%,1830,120,194,14.8

@@ -1,0 +1,7 @@
+Source,Static Assert Count,Dynamic Assert Count
+test-bst,4,0
+test-buffer,39,37
+test-ht,21,22
+test-quadtree,13,8
+test-rgba,18,0
+test-urlparser,42,0

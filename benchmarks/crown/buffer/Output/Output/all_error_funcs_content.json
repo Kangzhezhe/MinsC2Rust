@@ -1,0 +1,5 @@
+{
+    "test-buffer": {
+        "equal": "\n\npub fn equal(a: String, b: String) -> bool {\n    if a != b {\n        println!();\n        println!(\"  expected: '{}'\", a);\n        println!(\"    actual: '{}'\", b);\n        println!();\n        std::process::exit(1);\n    }\n    true\n}\n\nfn main(){}\n //编译报错信息："
+    }
+}

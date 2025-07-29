@@ -1,0 +1,22 @@
+{
+    "rgba": {
+        "rgba_from_rgba": 0,
+        "h": 0,
+        "rgba_from_rgb": 0,
+        "rgba_from_hex6_string": 1,
+        "rgba_from_hex3_string": 0,
+        "rgba_from_rgba_string": 0,
+        "rgba_from_hex_string": 0,
+        "rgba_from_name_string": 0,
+        "rgba_from_rgb_string": 0,
+        "rgba_from_string": 1,
+        "rgba_to_string": 0,
+        "rgba_new": 0
+    },
+    "test-rgba": {
+        "test_to_string": 0,
+        "test_rgba": 0,
+        "test_hex": 0,
+        "test_rgb": 0
+    }
+}

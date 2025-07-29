@@ -1,0 +1,115 @@
+Total time taken for conversion: 00:00:00 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: hash_key
+child_funs_list: [''], child_funs_c_list: ['hash_key']
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:00:06 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_set_entry
+child_funs_list: ['hash_key'], child_funs_c_list: ['ht_set_entry']
+Compilation failed for ht_set_entry, retrying... 1/11
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:00:44 seconds, Total retry count: 1, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_expand
+child_funs_list: ['ht_set_entry', 'hash_key'], child_funs_c_list: ['ht_expand']
+Compilation failed for ht_expand, retrying... 1/9
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:01:42 seconds, Total retry count: 2, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_destroy
+child_funs_list: [''], child_funs_c_list: ['ht_destroy']
+Compilation failed for ht_destroy, retrying... 1/7
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:02:08 seconds, Total retry count: 3, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_create
+child_funs_list: [''], child_funs_c_list: ['ht_create']
+Compilation failed for ht_create, retrying... 1/7
+# Trajectory 1: 在这一轮改错中，我删除了 `use std::rc::Rc;` 和 `use std::cell::RefCell;` 这两条导入语句，同时保留了 `const INITIAL_CAPACITY: usize = 16;` 的定义。报错信息指出在 `pub entries: Vec<Rc<RefCell<HtEntry<T>>>>` 这一行中，无法找到类型 `Rc`，因为 `Rc` 和 `RefCell` 的导入语句被删除了，导致编译器无法识别这些类型。
+Compilation failed for ht_create, retrying... 2/7
+repair function list: dict_keys(['ht_create'])
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:02:50 seconds, Total retry count: 5, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_set
+child_funs_list: ['ht_expand', 'ht_set_entry', 'hash_key'], child_funs_c_list: ['ht_set']
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:02:54 seconds, Total retry count: 5, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_length
+child_funs_list: [''], child_funs_c_list: ['ht_length']
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:02:56 seconds, Total retry count: 5, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_get
+child_funs_list: ['hash_key'], child_funs_c_list: ['ht_get']
+Compilation failed for ht_get, retrying... 1/7
+# Trajectory 1: 这一次我修改了`ht_get`函数中的返回语句，将原来的`return Some(Rc::clone(&table.entries[index].borrow().value.as_ref().unwrap()));`改为`let value = table.entries[index].borrow().value.as_ref().unwrap(); return Some(Rc::new(RefCell::new(value.clone())));`。报错信息指出类型不匹配，具体是`expected type parameter T, found &T`，即期望的类型是`T`，但实际得到的是`&T`。错误发生在`RefCell::new(value.clone())`这一部分，因为`value`是一个引用类型，而`RefCell::new`期望的是`T`类型。
+Compilation failed for ht_get, retrying... 2/7
+repair function list: dict_keys(['ht_get'])
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:03:54 seconds, Total retry count: 7, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_iterator
+child_funs_list: [''], child_funs_c_list: ['ht_iterator']
+Compilation failed for ht_iterator, retrying... 1/7
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:04:06 seconds, Total retry count: 8, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ht_next
+child_funs_list: [''], child_funs_c_list: ['ht_next']
+Compilation failed for ht_next, retrying... 1/7
+all_files_list: ['ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:04:31 seconds, Total retry count: 9, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: test_ht_update_value
+child_funs_list: ['hash_key', 'ht_destroy', 'ht_create', 'ht_get', 'ht_expand', 'ht_set', 'ht_set_entry', 'ht_length'], child_funs_c_list: ['test_ht_update_value']
+all_files_list: ['ht', 'test-ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:04:53 seconds, Total retry count: 9, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: test_ht_memory_management
+child_funs_list: ['hash_key', 'ht_destroy', 'ht_create', 'ht_expand', 'ht_set', 'ht_set_entry', 'ht_iterator', 'ht_next'], child_funs_c_list: ['test_ht_memory_management']
+Compilation failed for test_ht_memory_management, retrying... 1/7
+# Trajectory 1: 这一次我修改了`ht_destroy`函数调用时的代码，原本的代码是`ht_destroy(it._table.borrow().clone())`，报错信息指出`Ref<'_, Ht<Rc<RefCell<i32>>>>`类型没有名为`clone`的方法。报错的关键信息是`no method named 'clone' found for struct 'Ref<'_, Ht<Rc<RefCell<i32>>>>' in the current scope`，并且提示使用关联函数语法`Ref::<'_, Ht<Rc<RefCell<i32>>>>::clone(&it._table.borrow())`来替代。
+Compilation failed for test_ht_memory_management, retrying... 2/7
+repair function list: dict_keys(['ht_destroy', 'test_ht_memory_management'])
+# Trajectory 2: 这一次我修改了 `test_ht_memory_management` 函数中的语句，将原来的 `ht_destroy(it._table.borrow().clone())` 修改为 `let table = it._table.borrow().clone(); ht_destroy(table);`。报错信息显示在 `it._table.borrow().clone()` 处，错误是 `no method named `clone` found for struct `Ref<'_, Ht<Rc<RefCell<i32>>>>`，提示 `clone` 是一个关联函数而不是方法，需要使用 `Ref::<'_, Ht<Rc<RefCell<i32>>>>::clone(&it._table.borrow())` 的语法来调用。
+Compilation failed for test_ht_memory_management, retrying... 3/7
+repair function list: dict_keys(['test_ht_memory_management'])
+# Trajectory 3: 这一次我修改了 `test_ht_memory_management` 函数中的 `let table = it._table.borrow().clone();` 语句，将其改为 `let table = Rc::try_unwrap(it._table).unwrap().into_inner();`。报错信息指出 `Ht<Rc<RefCell<i32>>>` 没有实现 `Debug` trait，导致在调用 `unwrap()` 时无法格式化错误信息。错误发生在 `Rc::try_unwrap(it._table).unwrap()` 这一行，原因是 `Result` 的 `unwrap` 方法要求错误类型实现 `Debug` trait，而 `Ht<Rc<RefCell<i32>>>` 没有实现该 trait。
+Compilation failed for test_ht_memory_management, retrying... 4/7
+repair function list: dict_keys(['test_ht_memory_management'])
+all_files_list: ['ht', 'test-ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:07:08 seconds, Total retry count: 13, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: test_ht_set_and_get
+child_funs_list: ['hash_key', 'ht_destroy', 'ht_create', 'ht_get', 'ht_expand', 'ht_set', 'ht_set_entry', 'ht_length'], child_funs_c_list: ['test_ht_set_and_get']
+all_files_list: ['ht', 'test-ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:08:33 seconds, Total retry count: 13, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: test_ht_create_and_destroy
+child_funs_list: ['ht_destroy', 'ht_length', 'ht_create'], child_funs_c_list: ['test_ht_create_and_destroy']
+all_files_list: ['ht', 'test-ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion: 00:08:53 seconds, Total retry count: 13, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: test_ht_iterator
+child_funs_list: ['hash_key', 'ht_destroy', 'ht_create', 'ht_expand', 'ht_set', 'ht_set_entry', 'ht_iterator', 'ht_next'], child_funs_c_list: ['test_ht_iterator']
+Compilation failed for test_ht_iterator, retrying... 1/7
+all_files_list: ['ht', 'test-ht']
+all_files:['test-ht', 'ht']
+Processing extra insert
+Total time taken for conversion :00:10:11 seconds, Total retry count: 14, Total regenerate count: 0,Total error count:0, Total error funcs:[]

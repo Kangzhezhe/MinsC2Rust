@@ -1,0 +1,8 @@
+Source,Pass Rate (with test),Pass count (with test),Total count (with test),Pass Rate (without test),Pass count (without test),Total count (without test)
+test-ht,100.00%,15,15,100.00%,10,10
+test-rgba,94.12%,16,17,100.00%,12,12
+test-buffer,100.00%,39,39,100.00%,21,21
+test-urlparser,100.00%,2,2,100.00%,1,1
+test-bst,100.00%,11,11,100.00%,10,10
+test-quadtree,96.67%,29,30,100.00%,26,26
+Overall,98.25%,112,114,100.00%,80,80

@@ -1,0 +1,14 @@
+Total time taken for conversion: 00:00:00 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: ParseURL
+child_funs_list: [''], child_funs_c_list: ['ParseURL']
+all_files_list: ['urlparser']
+all_files:['test-urlparser', 'urlparser']
+Processing extra insert
+Total time taken for conversion: 00:00:52 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: test_parse_url
+child_funs_list: ['ParseURL'], child_funs_c_list: ['test_parse_url']
+all_files_list: ['urlparser', 'test-urlparser']
+all_files:['test-urlparser', 'urlparser']
+Processing extra insert
+Compilation failed for json processed_all_files.rs, retrying...
+Total time taken for conversion :00:01:46 seconds, Total retry count: 0, Total regenerate count: 0,Total error count:0, Total error funcs:[]

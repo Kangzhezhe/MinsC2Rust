@@ -1,0 +1,18 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 18 tests
+test test_buffer_clear ... FAILED
+test test_buffer_append_n ... FAILED
+test test_buffer_append__grow ... FAILED
+test test_buffer_append ... FAILED
+test test_buffer_equals ... FAILED
+test test_buffer_fill ... FAILED
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
