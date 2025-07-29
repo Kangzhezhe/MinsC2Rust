@@ -1,0 +1,3 @@
+[submodule "Tool"]
+	path = Tool
+	url = https://github.com/Kangzhezhe/MinsC2Rust_Tool.git
