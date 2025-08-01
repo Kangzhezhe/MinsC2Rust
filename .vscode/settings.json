@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "vec2.h": "c",
+        "assert.h": "c"
+    }
+}

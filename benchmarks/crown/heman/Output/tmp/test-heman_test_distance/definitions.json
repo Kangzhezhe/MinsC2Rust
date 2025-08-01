@@ -1,0 +1,20 @@
+[
+  {
+    "end_line": 43,
+    "name": "draw_circle",
+    "start_line": 24,
+    "type": "Function"
+  },
+  {
+    "end_line": 53,
+    "name": "test_distance",
+    "start_line": 46,
+    "type": "Function"
+  },
+  {
+    "end_line": 55,
+    "name": "main",
+    "start_line": 55,
+    "type": "Function"
+  }
+]
