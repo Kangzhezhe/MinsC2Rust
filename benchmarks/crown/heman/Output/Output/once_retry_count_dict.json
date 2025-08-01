@@ -1,10 +1,1 @@
-{
-    "test-heman": {
-        "draw_circle": 0,
-        "test_lighting": 1,
-        "test_points_density": 4
-    },
-    "test-planet": {
-        "make_island": 0
-    }
-}
+{}
