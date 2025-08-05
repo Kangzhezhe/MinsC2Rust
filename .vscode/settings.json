@@ -1,6 +1,9 @@
 {
     "files.associations": {
         "vec2.h": "c",
-        "assert.h": "c"
+        "assert.h": "c",
+        "plane.h": "c",
+        "stb_image_write.h": "c",
+        "stb_image_resize.h": "c"
     }
 }

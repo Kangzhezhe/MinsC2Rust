@@ -1,0 +1,99 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 20 tests
+test test_add_strings_and_blobs_no_compression ... ok
+test test_add_strings_and_blobs_with_compression ... ok
+test test_binn_size_and_validation ... FAILED
+test test_calc_allocation ... ok
+test test_binn_version ... ok
+test test_binn_size_operations ... ok
+test test_create_and_add_values_no_compression ... ok
+test test_create_binn_structures ... FAILED
+test test_create_and_add_values_with_compression ... ok
+test test_endianess ... FAILED
+test test_int64 ... ok
+test test_invalid_binn ... ok
+test test_invalid_read_operations ... ok
+test test_preallocated_binn ... ok
+test test_valid_binn_creation ... FAILED
+test test_read_values_no_compression ... FAILED
+test test_floating_point_numbers ... ok
+test test_preallocated_binn_creation ... ok
+test test_invalid_binn_creation ... ok
+test test_read_values_with_compression ... FAILED
+
+failures:
+
+---- test_binn_size_and_validation stdout ----
+
+thread '<unnamed>' panicked at tests/test_binn.rs:176:5:
+assertion failed: IsValidBinnHeader(&ptr.unwrap(), &mut type_, &mut count, &mut size,
+    &mut header_size)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'test_binn_size_and_validation' panicked at tests/test_binn.rs:164:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_create_binn_structures stdout ----
+
+thread '<unnamed>' panicked at tests/test_binn.rs:332:5:
+assertion failed: list.alloc_size > MAX_BINN_HEADER
+
+thread 'test_create_binn_structures' panicked at tests/test_binn.rs:314:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_endianess stdout ----
+testing endianess... 
+
+thread '<unnamed>' panicked at tests/test_binn.rs:459:9:
+assertion `left == right` failed
+  left: 287454020
+ right: 1144201745
+
+thread 'test_endianess' panicked at tests/test_binn.rs:408:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_valid_binn_creation stdout ----
+
+thread '<unnamed>' panicked at tests/test_binn.rs:785:5:
+assertion failed: list.alloc_size > MAX_BINN_HEADER
+
+thread 'test_valid_binn_creation' panicked at tests/test_binn.rs:769:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_read_values_no_compression stdout ----
+
+thread '<unnamed>' panicked at tests/test_binn.rs:750:5:
+assertion failed: binn_list_get_value(Some(&list.pbuf), 1, &mut value) == true
+
+thread 'test_read_values_no_compression' panicked at tests/test_binn.rs:733:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_read_values_with_compression stdout ----
+
+thread '<unnamed>' panicked at tests/test_binn.rs:382:5:
+assertion failed: list_wrap(&mut list, 123) == TRUE
+
+thread 'test_read_values_with_compression' panicked at tests/test_binn.rs:358:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+
+failures:
+    test_binn_size_and_validation
+    test_create_binn_structures
+    test_endianess
+    test_read_values_no_compression
+    test_read_values_with_compression
+    test_valid_binn_creation
+
+test result: FAILED. 14 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

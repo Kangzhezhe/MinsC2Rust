@@ -12,6 +12,7 @@
 #include "stb_image_write.h"
 #include "stb_image_resize.h"
 #include "stb_image.h"
+#include "heman.h"
 #pragma GCC diagnostic pop
 
 heman_image* hut_read_image(const char* filename, int nbands)
