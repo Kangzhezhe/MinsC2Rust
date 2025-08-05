@@ -1,3 +1,0 @@
-Source,LOC,Total LOC,LCov,Rust LOC,Func Count,Max Fn Len,Mean Fn Len
-test-binn,2317,2829,81.9%,2284,99,131,26.8
-Overall,2317,2829,81.9%,2284,99,131,26.8
