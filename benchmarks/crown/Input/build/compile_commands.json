@@ -1,8 +1,58 @@
 [
     {
         "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/test/test-binn.c.o -c /app/benchmarks/crown/Input/test/test-binn.c",
+        "file": "/app/benchmarks/crown/Input/test/test-binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/bst.c.o -c /app/benchmarks/crown/Input/src/bst.c",
+        "file": "/app/benchmarks/crown/Input/src/bst.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/buffer.c.o -c /app/benchmarks/crown/Input/src/buffer.c",
+        "file": "/app/benchmarks/crown/Input/src/buffer.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
+        "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/quadtree.c.o -c /app/benchmarks/crown/Input/src/quadtree.c",
+        "file": "/app/benchmarks/crown/Input/src/quadtree.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/rgba.c.o -c /app/benchmarks/crown/Input/src/rgba.c",
+        "file": "/app/benchmarks/crown/Input/src/rgba.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-binn.dir/src/urlparser.c.o -c /app/benchmarks/crown/Input/src/urlparser.c",
+        "file": "/app/benchmarks/crown/Input/src/urlparser.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-bst.dir/test/test-bst.c.o -c /app/benchmarks/crown/Input/test/test-bst.c",
         "file": "/app/benchmarks/crown/Input/test/test-bst.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-bst.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -18,6 +68,11 @@
         "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-bst.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
         "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-bst.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -41,6 +96,11 @@
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-buffer.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-buffer.dir/src/bst.c.o -c /app/benchmarks/crown/Input/src/bst.c",
         "file": "/app/benchmarks/crown/Input/src/bst.c"
     },
@@ -53,6 +113,11 @@
         "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-buffer.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
         "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-buffer.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -76,6 +141,11 @@
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-ht.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-ht.dir/src/bst.c.o -c /app/benchmarks/crown/Input/src/bst.c",
         "file": "/app/benchmarks/crown/Input/src/bst.c"
     },
@@ -88,6 +158,11 @@
         "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-ht.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
         "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-ht.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -106,8 +181,58 @@
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/test/test-lil.c.o -c /app/benchmarks/crown/Input/test/test-lil.c",
+        "file": "/app/benchmarks/crown/Input/test/test-lil.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/bst.c.o -c /app/benchmarks/crown/Input/src/bst.c",
+        "file": "/app/benchmarks/crown/Input/src/bst.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/buffer.c.o -c /app/benchmarks/crown/Input/src/buffer.c",
+        "file": "/app/benchmarks/crown/Input/src/buffer.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
+        "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/quadtree.c.o -c /app/benchmarks/crown/Input/src/quadtree.c",
+        "file": "/app/benchmarks/crown/Input/src/quadtree.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/rgba.c.o -c /app/benchmarks/crown/Input/src/rgba.c",
+        "file": "/app/benchmarks/crown/Input/src/rgba.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-lil.dir/src/urlparser.c.o -c /app/benchmarks/crown/Input/src/urlparser.c",
+        "file": "/app/benchmarks/crown/Input/src/urlparser.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-quadtree.dir/test/test-quadtree.c.o -c /app/benchmarks/crown/Input/test/test-quadtree.c",
         "file": "/app/benchmarks/crown/Input/test/test-quadtree.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-quadtree.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -123,6 +248,11 @@
         "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-quadtree.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
         "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-quadtree.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -146,6 +276,11 @@
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-rgba.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-rgba.dir/src/bst.c.o -c /app/benchmarks/crown/Input/src/bst.c",
         "file": "/app/benchmarks/crown/Input/src/bst.c"
     },
@@ -158,6 +293,11 @@
         "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-rgba.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
         "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-rgba.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
@@ -181,6 +321,11 @@
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-urlparser.dir/src/binn.c.o -c /app/benchmarks/crown/Input/src/binn.c",
+        "file": "/app/benchmarks/crown/Input/src/binn.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-urlparser.dir/src/bst.c.o -c /app/benchmarks/crown/Input/src/bst.c",
         "file": "/app/benchmarks/crown/Input/src/bst.c"
     },
@@ -193,6 +338,11 @@
         "directory": "/app/benchmarks/crown/Input/build",
         "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-urlparser.dir/src/ht.c.o -c /app/benchmarks/crown/Input/src/ht.c",
         "file": "/app/benchmarks/crown/Input/src/ht.c"
+    },
+    {
+        "directory": "/app/benchmarks/crown/Input/build",
+        "command": "/usr/bin/cc  -I/app/benchmarks/crown/Input/src -I/app/benchmarks/crown/Input/test  -o CMakeFiles/test-urlparser.dir/src/lil.c.o -c /app/benchmarks/crown/Input/src/lil.c",
+        "file": "/app/benchmarks/crown/Input/src/lil.c"
     },
     {
         "directory": "/app/benchmarks/crown/Input/build",

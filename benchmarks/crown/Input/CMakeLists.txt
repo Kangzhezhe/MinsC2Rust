@@ -38,12 +38,13 @@ message(STATUS "TEST_FILES: ${TEST_FILES}")
 message(STATUS "NON_TEST_FILES: ${NON_TEST_FILES}")
 
 
-link_directories(/home/mins01/Input/arraylist_rust/target/release)
+# link_directories(/home/mins01/Input/arraylist_rust/target/release)
 
 # 为每个测试文件创建一个可执行文件并添加到测试中
 foreach(TEST_FILE ${TEST_FILES})
     get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
     add_executable(${TEST_NAME} ${TEST_FILE} ${NON_TEST_FILES} ${SOURCES})
-    target_link_libraries(${TEST_NAME} arraylist_rust pthread dl m)
+    # target_link_libraries(${TEST_NAME} arraylist_rust pthread dl m)
+    target_link_libraries(${TEST_NAME} pthread dl m)
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endforeach()

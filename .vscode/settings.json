@@ -4,6 +4,8 @@
         "assert.h": "c",
         "plane.h": "c",
         "stb_image_write.h": "c",
-        "stb_image_resize.h": "c"
+        "stb_image_resize.h": "c",
+        "heman.h": "c",
+        "hut.h": "c"
     }
 }
