@@ -14,6 +14,11 @@ binary-heap,Flourine,100.0%,96.0%
 binary-heap,Laertes,15.60%,0.00%
 binary-heap,MinsC2Rust,100.00%,100.00%
 binary-heap,Vert,96.9%,50.0%
+binn,Crown,1.0%,9.8%
+binn,Flourine,91.7%,75.0%
+binn,Laertes,1.0%,9.8%
+binn,MinsC2Rust,99.08%,83.33%
+binn,Vert,71.0%,9.6%
 binomial-heap,Crown,6.4%,1.2%
 binomial-heap,Flourine,96.0%,69.9%
 binomial-heap,Laertes,7.40%,1.80%
@@ -54,6 +59,11 @@ ht,Flourine,98.4%,89.0%
 ht,Laertes,6.00%,0.00%
 ht,MinsC2Rust,100.00%,83.33%
 ht,Vert,92.6%,9.5%
+lil,Crown,1.6%,2.0%
+lil,Flourine,95.6%,88.2%
+lil,Laertes,1.6%,2.0%
+lil,MinsC2Rust,100.00%,83.33%
+lil,Vert,72.5%,18.8%
 list,Crown,5.0%,0.6%
 list,Flourine,86.3%,44.5%
 list,Laertes,5.70%,0.90%

@@ -4,3 +4,5 @@ pub mod ht;
 pub mod urlparser;
 pub mod quadtree;
 pub mod rgba;
+pub mod lil;
+pub mod binn;

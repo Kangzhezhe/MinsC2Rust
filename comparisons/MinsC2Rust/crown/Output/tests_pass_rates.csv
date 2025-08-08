@@ -5,4 +5,6 @@ test-buffer,61.11%,11,18
 test-urlparser,100.00%,1,1
 test-bst,0.00%,0,1
 test-quadtree,66.67%,2,3
-Overall,59.38%,19,32
+test-lil,0.00%,0,0
+test-binn,33.33%,5,15
+Overall,51.06%,24,47
