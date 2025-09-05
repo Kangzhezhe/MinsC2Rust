@@ -49,6 +49,24 @@ MinsC2Rust follows a **divide-transpile-reconstruct** paradigm:
 
 ## 🚀 Quick Start
 
+
+### Step 0: Configure LLM Settings
+
+**⚠️ Important: Before running the transpilation, you need to configure your LLM API settings.**
+
+1. **Configure LLM API key** in the following config files:
+   - `Tool/Tool_py/configs/config_c_algorithm.ini`
+   - `Tool/Tool_py/configs/config_crown.ini`
+
+2. **Available LLM configurations** can be found in:
+   ```
+   Tool/Tool_py/models/
+   ├── qianwen.py           # (default) Deepseek-v3 models
+   ├── claude.py            # Anthropic Claude 
+   ├── gpt.py               # OpenAI GPT models
+   └── ...                  # Other supported models
+   ```
+
 ### Step 1: Build Docker Image
 
 ```bash
