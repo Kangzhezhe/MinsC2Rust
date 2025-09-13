@@ -8,3 +8,5 @@ comparisons/Laertes/c_algorithm/
 comparisons/Laertes/crown/
 comparisons/Vert/c_algorithm/
 comparisons/Vert/crown/
+__pycache__/
+temp/
