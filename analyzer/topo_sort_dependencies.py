@@ -1,0 +1,561 @@
+#!/usr/bin/env python3
+
+"""
+Topologically sort symbols in analyzer/output/symbol_dependencies.json
+using the same algorithm as analyze_function_calls in clang_callgraph.py.
+
+Usage:
+  python -m analyzer.topo_sort_dependencies \
+      --input output/symbol_dependencies.json \
+      --output output/symbol_topo_order.json \
+      --edge-type function_call \
+      --node-type functions
+
+edge-type can be: function_call, non_function_call, type_reference, macro_use, variable_use, struct_member, enum_use, or all
+node-type can be:
+  - functions: 只保留函数节点
+  - non_functions: 排除函数节点（即宏/结构体/typedef等）
+  - all: 不过滤节点类型
+  - 或逗号分隔的具体类型列表，例如: "macros,structs,typedefs"
+
+Default input: analyzer/output/symbol_dependencies.json (relative to this file's directory)
+Default output: analyzer/output/symbol_topo_order.json
+Default edge-type: function_call
+Default node-type: all
+Optional: --include-isolated 将符合节点类型但在过滤后没有任何边的节点也纳入结果（默认开启，可用 --no-include-isolated 关闭）
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from collections import defaultdict, deque, OrderedDict
+from typing import Dict, List, Iterable, Tuple, Set, Callable
+
+
+def analyze_function_calls(funcs_childs: Dict[str, List[str]]) -> Tuple[OrderedDict[str, int], List[List[str]]]:
+    """将有向有环图转换为有向无环图，循环依赖中的节点设置为相同深度，然后进行拓扑排序
+    
+    Returns:
+        Tuple[OrderedDict[str, int], List[List[str]]]: 
+            - 拓扑排序结果（符号名 -> 深度）
+            - 循环依赖组列表（每个组包含相互依赖的符号列表）
+    """
+    
+    def find_strongly_connected_components(graph: Dict[str, List[str]]) -> List[Set[str]]:
+        """使用Tarjan算法找到强连通分量（循环依赖组）"""
+        index_counter = [0]
+        stack = []
+        lowlinks = {}
+        index = {}
+        on_stack = {}
+        sccs = []
+        
+        def strongconnect(node):
+            index[node] = index_counter[0]
+            lowlinks[node] = index_counter[0]
+            index_counter[0] += 1
+            stack.append(node)
+            on_stack[node] = True
+            
+            for neighbor in graph.get(node, []):
+                if neighbor not in index:
+                    strongconnect(neighbor)
+                    lowlinks[node] = min(lowlinks[node], lowlinks[neighbor])
+                elif on_stack[neighbor]:
+                    lowlinks[node] = min(lowlinks[node], index[neighbor])
+            
+            if lowlinks[node] == index[node]:
+                component = set()
+                while True:
+                    w = stack.pop()
+                    on_stack[w] = False
+                    component.add(w)
+                    if w == node:
+                        break
+                sccs.append(component)
+        
+        for node in graph:
+            if node not in index:
+                strongconnect(node)
+        
+        return sccs
+    
+    # 将有向有环图转换为有向无环图，并计算深度
+    def remove_cycles(graph: Dict[str, List[str]]):
+        visited = set()
+        stack = set()
+        result: Dict[str, List[str]] = defaultdict(list)
+        depth: Dict[str, int] = defaultdict(int)
+        
+        # 找到所有强连通分量
+        sccs = find_strongly_connected_components(graph)
+        
+        
+        # 创建节点到SCC的映射
+        node_to_scc = {}
+        scc_cycles = set()  # 真正的循环（大于1个节点的SCC）
+        cycle_groups = []  # 收集循环依赖组
+        for scc in sccs:
+            if len(scc) > 1:
+                scc_cycles.add(frozenset(scc))
+                cycle_groups.append(list(scc))  # 保存为列表格式
+            for node in scc:
+                node_to_scc[node] = frozenset(scc)
+
+        def visit(node: str, current_depth: int) -> bool:
+            if node in stack:
+                return False
+            if node in visited:
+                return True
+            stack.add(node)
+            
+            node_scc = node_to_scc.get(node, frozenset([node]))
+            
+            for neighbor in graph.get(node, []):
+                neighbor_scc = node_to_scc.get(neighbor, frozenset([neighbor]))
+                
+                if not visit(neighbor, current_depth + 1):
+                    continue
+                    
+                result[node].append(neighbor)
+                
+                # 如果在同一个循环组中，设置相同深度
+                if node_scc in scc_cycles and neighbor_scc in scc_cycles and node_scc == neighbor_scc:
+                    # 循环组内的节点使用相同深度
+                    cycle_depth = max(current_depth, depth.get(node, 0), depth.get(neighbor, 0))
+                    depth[node] = cycle_depth
+                    depth[neighbor] = cycle_depth
+                else:
+                    # 正常情况
+                    depth[neighbor] = max(depth[neighbor], current_depth + 1)
+            
+            stack.remove(node)
+            visited.add(node)
+            
+            # 如果节点在循环组中，确保使用循环组深度
+            if node_scc in scc_cycles:
+                # 获取循环组中所有节点的最大深度
+                cycle_depth = current_depth
+                for cycle_node in node_scc:
+                    cycle_depth = max(cycle_depth, depth.get(cycle_node, current_depth))
+                # 将相同深度应用到循环组中的所有节点
+                for cycle_node in node_scc:
+                    depth[cycle_node] = cycle_depth
+            else:
+                depth[node] = max(depth[node], current_depth)
+            
+            return True
+
+        for node in graph:
+            if node not in visited:
+                visit(node, 0)
+
+        # 确保所有节点都在结果中，并统一循环组的深度
+        for node in graph:
+            if node not in result:
+                result[node] = []
+            if node not in depth:
+                depth[node] = 0
+        
+        # 最后一次统一循环组深度
+        for scc in scc_cycles:
+            if len(scc) > 1:
+                max_depth = max(depth.get(node, 0) for node in scc)
+                for node in scc:
+                    depth[node] = max_depth
+
+        return result, depth, cycle_groups
+
+    # 拓扑排序并返回有序字典
+    def topological_sort(graph: Dict[str, List[str]], depth: Dict[str, int]) -> OrderedDict[str, int]:
+        in_degree: Dict[str, int] = defaultdict(int)
+        for u in graph:
+            for v in graph[u]:
+                in_degree[v] += 1
+
+        queue = deque([u for u in graph if in_degree[u] == 0])
+        topo_order: List[str] = []
+
+        while queue:
+            u = queue.popleft()
+            topo_order.append(u)
+            for v in graph[u]:
+                in_degree[v] -= 1
+                if in_degree[v] == 0:
+                    queue.append(v)
+
+        # 反转结果以确保子函数在前，父函数在后
+        topo_order.reverse()
+
+        # 创建有序字典，但先按深度排序，然后在相同深度内按拓扑顺序排序
+        # 将节点按深度分组
+        depth_groups: Dict[int, List[str]] = defaultdict(list)
+        for node in topo_order:
+            depth_groups[depth[node]].append(node)
+        
+        # 按深度从高到低排序，然后在每个深度组内保持拓扑顺序
+        ordered_depth: OrderedDict[str, int] = OrderedDict()
+        for depth_value in sorted(depth_groups.keys(), reverse=True):
+            for node in depth_groups[depth_value]:
+                ordered_depth[node] = depth_value
+
+        return ordered_depth
+
+    def ensure_ordered_depth(ordered_depth: OrderedDict[str, int]) -> OrderedDict[str, int]:
+        # 这个函数的逻辑有问题，它错误地提升了依赖者的深度
+        # 暂时禁用这个函数，让拓扑排序的自然深度起作用
+        return ordered_depth
+
+    # 转换为无环图并计算深度
+    dag, depth, cycle_groups = remove_cycles(funcs_childs)
+
+    # 进行拓扑排序并返回有序字典
+    ordered_depth = topological_sort(dag, depth)
+
+    result = ensure_ordered_depth(ordered_depth)
+
+    return result, cycle_groups
+
+
+def load_dependency_graph(
+    input_path: str,
+    edge_type: str = "function_call",
+    node_type: str = "all",
+    include_isolated: bool = False,
+) -> Dict[str, List[str]]:
+    """Build adjacency dict from symbol_dependencies.json filtered by edge_type and node_type.
+
+    - edge_type:
+        * specific type (e.g., "function_call")
+        * "non_function_call" => 过滤掉 function_call，其余类型全部保留
+        * "all" => 不过滤依赖类型
+    - node_type:
+        * "functions" => 仅保留函数节点
+        * "non_functions" => 排除函数节点
+        * "all" => 不过滤节点类型
+        * 逗号分隔的具体类型列表（如 "macros,structs,typedefs"）
+
+    Returns a dict: source_symbol_name -> [target_symbol_name, ...]
+    Ensures all symbols appear as keys (even if empty list), based on dependencies seen.
+    If include_isolated=True, also includes nodes that match node_type even if they
+    do not participate in any remaining edges after filtering.
+    """
+    with open(input_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    deps = data.get("dependencies", [])
+    symbols = data.get("symbols", {})
+
+    # name -> set(types)
+    name_to_types: Dict[str, Set[str]] = defaultdict(set)
+    for _id, sym in symbols.items():
+        n = sym.get("name")
+        t = sym.get("type")
+        if n and t:
+            name_to_types[n].add(t)
+
+    allow_all_edges = edge_type == "all"
+    exclude_function_call = edge_type == "non_function_call"
+
+    graph: Dict[str, List[str]] = defaultdict(list)
+
+    # Collect nodes set to ensure zero-outgoing nodes included later
+    nodes = set()
+
+    # 节点过滤器
+    def build_node_predicate(arg: str) -> Callable[[str], bool]:
+        arg = (arg or "all").strip().lower()
+        if arg == "all":
+            return lambda name: True
+        if arg == "functions":
+            return lambda name: "functions" in name_to_types.get(name, set())
+        if arg == "non_functions":
+            return lambda name: any(t != "functions" for t in name_to_types.get(name, set()))
+        wanted = {x.strip() for x in arg.split(',') if x.strip()}
+        return lambda name: any(t in wanted for t in name_to_types.get(name, set()))
+
+    node_ok = build_node_predicate(node_type)
+
+    for dep in deps:
+        dep_type = dep.get("dependency_type")
+        # 依赖类型过滤
+        if not allow_all_edges:
+            if exclude_function_call:
+                if dep_type == "function_call":
+                    continue
+            else:
+                if dep_type != edge_type:
+                    continue
+
+        src = dep.get("source", {}).get("name")
+        tgt = dep.get("target", {}).get("name")
+        if not src or not tgt:
+            continue
+
+        # 节点类型过滤（源与目标都要满足）
+        if not node_ok(src) or not node_ok(tgt):
+            continue
+
+        nodes.add(src)
+        nodes.add(tgt)
+        # avoid duplicates in adjacency list
+        if tgt not in graph[src]:
+            graph[src].append(tgt)
+
+    # ensure every node appears in graph with at least empty list
+    for n in nodes:
+        graph.setdefault(n, [])
+
+    # optionally include isolated nodes that match node_type, even if they have no edges
+    if include_isolated:
+        for _id, sym in symbols.items():
+            n = sym.get("name")
+            if not n:
+                continue
+            if node_ok(n):
+                graph.setdefault(n, [])
+
+    return dict(graph)
+
+
+def compute_file_topology(input_path: str, ordered_symbols: OrderedDict[str, int], 
+                         edge_type: str = "all", node_type: str = "all") -> Tuple[List[Tuple[str, int]], List[List[str]]]:
+    """基于符号依赖关系计算文件的拓扑排序
+    
+    Args:
+        input_path: symbol_dependencies.json 文件路径
+        ordered_symbols: 符号的拓扑排序结果
+        edge_type: 边类型过滤
+        node_type: 节点类型过滤（仅用于确定文件是否相关，依赖关系分析使用所有符号）
+    
+    Returns:
+        Tuple[List[Tuple[str, int]], List[List[str]]]:
+            - 文件拓扑排序结果 [(文件路径, 深度), ...]
+            - 文件循环依赖组
+    """
+    with open(input_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    deps = data.get("dependencies", [])
+    symbols = data.get("symbols", {})
+    
+    # 获取文件到符号的映射 (不再使用会导致覆盖问题的 symbol_to_file)
+    file_to_symbols = defaultdict(set)
+    
+    for sym_id, sym_info in symbols.items():
+        name = sym_info.get("name")
+        file_path = sym_info.get("file_path")
+        if name and file_path:
+            file_to_symbols[file_path].add(name)
+    
+    # 节点类型过滤器（仅用于确定文件是否相关）
+    name_to_types: Dict[str, Set[str]] = defaultdict(set)
+    for _id, sym in symbols.items():
+        n = sym.get("name")
+        t = sym.get("type")
+        if n and t:
+            name_to_types[n].add(t)
+    
+    def build_node_predicate(arg: str) -> Callable[[str], bool]:
+        arg = (arg or "all").strip().lower()
+        if arg == "all":
+            return lambda name: True
+        if arg == "functions":
+            return lambda name: "functions" in name_to_types.get(name, set())
+        if arg == "non_functions":
+            return lambda name: any(t != "functions" for t in name_to_types.get(name, set()))
+        wanted = {x.strip() for x in arg.split(',') if x.strip()}
+        return lambda name: any(t in wanted for t in name_to_types.get(name, set()))
+    
+    node_ok = build_node_predicate(node_type)
+    
+    # 确定相关文件（包含指定类型符号的文件）
+    relevant_files = set()
+    for file_path, symbol_names in file_to_symbols.items():
+        if any(node_ok(name) for name in symbol_names):
+            relevant_files.add(file_path)
+    
+    # 构建文件间依赖图（使用所有符号的依赖关系，不过滤符号类型）
+    file_dependencies = defaultdict(set)
+    allow_all_edges = edge_type == "all"
+    exclude_function_call = edge_type == "non_function_call"
+    
+    for dep in deps:
+        dep_type = dep.get("dependency_type")
+        
+        # 依赖类型过滤
+        if not allow_all_edges:
+            if exclude_function_call:
+                if dep_type == "function_call":
+                    continue
+            else:
+                if dep_type != edge_type:
+                    continue
+        
+        src_info = dep.get("source", {})
+        tgt_info = dep.get("target", {})
+        
+        src_name = src_info.get("name")
+        tgt_name = tgt_info.get("name")
+        src_file = src_info.get("file")  # 直接从依赖记录获取文件信息
+        tgt_file = tgt_info.get("file")
+        
+        if not src_name or not tgt_name or not src_file or not tgt_file:
+            continue
+        
+        # 只考虑相关文件之间的依赖
+        if (src_file != tgt_file and 
+            src_file in relevant_files and tgt_file in relevant_files):
+            # src_file 依赖 tgt_file (src_file 中的符号使用了 tgt_file 中的符号)
+            file_dependencies[src_file].add(tgt_file)
+    
+    # 将文件依赖转换为字典格式
+    file_graph = {}
+    all_files = relevant_files.copy()
+    for src_file, tgt_files in file_dependencies.items():
+        all_files.add(src_file)
+        all_files.update(tgt_files)
+    
+    for file_path in all_files:
+        file_graph[file_path] = list(file_dependencies.get(file_path, set()))
+    
+    # 对文件进行拓扑排序
+    if file_graph:
+        file_ordered, file_cycles = analyze_function_calls(file_graph)
+    else:
+        file_ordered = OrderedDict()
+        file_cycles = []
+    
+    # 为没有依赖关系但包含相关符号的文件分配深度
+    for file_path in relevant_files:
+        if file_path not in file_ordered:
+            # 计算该文件中相关符号的平均深度
+            symbol_names = file_to_symbols[file_path]
+            symbol_depths = [ordered_symbols[name] for name in symbol_names 
+                           if name in ordered_symbols and node_ok(name)]
+            if symbol_depths:
+                avg_depth = sum(symbol_depths) // len(symbol_depths)
+                file_ordered[file_path] = avg_depth
+            else:
+                # 如果没有相关符号在排序中，设为默认深度
+                file_ordered[file_path] = 0
+    
+    return list(file_ordered.items()), file_cycles
+
+
+def save_topo_result(output_path: str, ordered: OrderedDict[str, int], cycle_groups: List[List[str]], 
+                    file_ordered: List[Tuple[str, int]] = None, file_cycles: List[List[str]] = None):
+    """Save ordered mapping and a simple ordered list."""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    ordered_list = list(ordered.items())  # [(name, depth), ...]
+    result = {
+        "count": len(ordered_list),
+        "ordered_depth": list(ordered.items()),  # preserve order
+        "ordered_names": [name for name, _ in ordered_list],
+        "cycle_groups": cycle_groups,  # 添加循环依赖组信息
+    }
+    
+    # 添加文件拓扑排序结果
+    if file_ordered is not None:
+        result["file_topology"] = {
+            "count": len(file_ordered),
+            "ordered_depth": file_ordered,
+            "ordered_names": [file_path for file_path, _ in file_ordered],
+            "cycle_groups": file_cycles or []
+        }
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Topologically sort symbol dependencies")
+    default_in = os.path.join(os.path.dirname(__file__), "output", "symbol_dependencies.json")
+    default_out = os.path.join(os.path.dirname(__file__), "output", "symbol_topo_order.json")
+    parser.add_argument("--input", "-i", default=default_in, help="Path to symbol_dependencies.json")
+    parser.add_argument("--output", "-o", default=default_out, help="Path to write topo order json")
+    parser.add_argument(
+        "--edge-type",
+        choices=[
+            "function_call",
+            "non_function_call",
+            "type_reference",
+            "macro_use",
+            "variable_use",
+            "struct_member",
+            "enum_use",
+            "all",
+        ],
+        default="all",
+        help="Which dependency type(s) to consider when building the graph",
+    )
+    parser.add_argument(
+        "--node-type",
+        default="all",
+        help=(
+            "Filter node categories. One of: 'functions', 'non_functions', 'all', "
+            "or a comma-separated list like 'macros,structs,typedefs'"
+        ),
+    )
+    parser.add_argument(
+        "--include-isolated",
+        dest="include_isolated",
+        action="store_true",
+        default=True,
+        help=(
+            "Include nodes that match --node-type even if, after edge filtering, "
+            "they do not appear in any dependency edges (useful for typedefs like buffer_t). "
+            "Enabled by default. Use --no-include-isolated to disable."
+        ),
+    )
+    parser.add_argument(
+        "--no-include-isolated",
+        dest="include_isolated",
+        action="store_false",
+        help="Disable including isolated nodes that match --node-type",
+    )
+
+    args = parser.parse_args()
+
+    graph = load_dependency_graph(
+        args.input,
+        edge_type=args.edge_type,
+        node_type=args.node_type,
+        include_isolated=args.include_isolated,
+    )
+    if not graph:
+        print("No dependencies found for the selected filters. Exiting.")
+        return 0
+
+    ordered, cycle_groups = analyze_function_calls(graph)
+    
+    # 计算文件拓扑排序
+    print("Computing file topology...")
+    file_ordered, file_cycles = compute_file_topology(args.input, ordered, args.edge_type, args.node_type)
+    
+    save_topo_result(args.output, ordered, cycle_groups, file_ordered, file_cycles)
+
+    print(f"✓ Topological order generated: {args.output}")
+    print(f"  Symbols: {len(ordered)} | Edge type: {args.edge_type} | Node type: {args.node_type}")
+    if cycle_groups:
+        print(f"  Symbol cycle groups: {len(cycle_groups)} (total symbols in cycles: {sum(len(group) for group in cycle_groups)})")
+    
+    print(f"  Files: {len(file_ordered)}")
+    if file_cycles:
+        print(f"  File cycle groups: {len(file_cycles)} (total files in cycles: {sum(len(group) for group in file_cycles)})")
+    
+    # 显示文件排序示例
+    if file_ordered:
+        print("\nFile topology (bottom-up order, first 5 files):")
+        for i, (file_path, depth) in enumerate(file_ordered[:5]):
+            print(f"  {i+1}. {file_path} (depth: {depth})")
+        if len(file_ordered) > 5:
+            print(f"  ... and {len(file_ordered) - 5} more files")
+    
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

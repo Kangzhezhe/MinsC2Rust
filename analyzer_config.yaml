@@ -1,0 +1,4 @@
+# Analyzer configuration
+# project_root 可以是绝对路径或相对于本配置文件所在目录的相对路径
+# project_root: benchmarks/c-algorithm
+project_root: benchmarks/crown/Input

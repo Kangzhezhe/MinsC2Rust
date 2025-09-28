@@ -10,3 +10,5 @@ comparisons/Vert/c_algorithm/
 comparisons/Vert/crown/
 __pycache__/
 temp/
+rag_chroma_db/
+.pytest_cache/
