@@ -1,0 +1,5 @@
+__pycache__/
+temp/
+.pytest_cache/
+mins_llm.egg-info/
+SWE-agent/

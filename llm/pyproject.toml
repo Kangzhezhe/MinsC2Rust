@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mins-llm"
+version = "0.1.0"
+description = "LLM toolkit with tool-calling, template parsing, and MCP support"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Mins", email = "1917874779@qq.com" }
+]
+license = "MIT"
+dependencies = [
+    "pytest",
+    "pytest-xdist",
+    "pydantic",
+    "chromadb==0.5.4",
+    "openai",
+    "langchain-openai",
+    "langchain-core",
+    "langchain-community",
+    "python-docx",
+    "pdfplumber",
+    "numpy>=1.24.4",
+    "pandas",
+    "requests",
+    "jsonschema",
+    "rich",
+    "pytest-repeat",
+    "fastmcp",
+    "websockets",
+    "pytest-asyncio",
+    "json-repair>=0.16.2"
+]
+
+
+[project.optional-dependencies]
+mcp = [
+  "fastmcp>=0.4.0",
+]
+
+[tool.setuptools]
+packages = []
+py-modules = ["llm"]
+include-package-data = true
+
+
+[tool.setuptools.package-data]
+llm = ["**/*.txt", "**/*.md"]

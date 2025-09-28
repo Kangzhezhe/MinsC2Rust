@@ -1,0 +1,8 @@
+--- a/app/calculator.py
++++ b/app/calculator.py
+@@ -3,4 +3,4 @@
+     '''返回 a 除以 b。当前实现存在精度缺陷。'''
+     if b == 0:
+         raise ValueError("division by zero")
+-    return a // b
++    return a / b

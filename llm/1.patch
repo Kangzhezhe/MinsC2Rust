@@ -1,0 +1,8 @@
+--- a/tests/test_calculator.py
++++ b/tests/test_calculator.py
+@@ -4,4 +4,4 @@
+     assert divide(9, 4) == 2.25
+ 
+ def test_divide_negative():
+-assert math.isclose(divide(-9, 4), -2.25, rel_tol=1e-9)
++    assert math.isclose(divide(-9, 4), -2.25, rel_tol=1e-9)
