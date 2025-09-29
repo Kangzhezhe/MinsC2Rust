@@ -9,8 +9,32 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from pydantic import BaseModel,Field, RootModel
+
 from .agent import Agent
 
+import subprocess
+import tempfile
+import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+class ToolOperation(BaseModel):
+    tool: str = Field(description='要调用的工具方法名')
+    args: Dict[str, Any] = Field(description='工具参数字典，可为空；',default_factory=dict)
+    kwargs: Dict[str, Any] = Field(description='关键字参数字典，可为空。',default_factory=dict)
+
+class ToolOperations(RootModel[List[ToolOperation]]):
+    """操作列表模型，封装一组工具调用。"""
+
+    @classmethod
+    def from_raw(cls, raw_ops: Iterable[Any]) -> "ToolOperations":
+        data = list(raw_ops)
+        if not data:
+            raise SWEAgentToolError("operations 不能为空")
+        return cls.model_validate(data)
+
+    def __iter__(self):
+        return iter(self.root)
 
 class SWEAgentToolError(RuntimeError):
     """自定义异常：用于指示SWE Agent工具执行失败。"""
@@ -19,6 +43,7 @@ class SWEAgentToolError(RuntimeError):
 @dataclass
 class SWEFileSystemTools:
     """SWE Agent默认工具集，实现文件操作、命令执行等能力。"""
+    PLACEHOLDER_LINE_RE = re.compile(r"^\s*(?:(?://|#)\s*)?\.\.\. existing code \.\.\.\s*$")
 
     workspace_root: Path
     encoding: str = "utf-8"
@@ -157,6 +182,49 @@ class SWEFileSystemTools:
     # ------------------------------------------------------------------
     # 工具接口
     # ------------------------------------------------------------------
+    
+    def run_tools_parallel(
+        self,
+        operations: List[ToolOperation],
+        max_workers: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """并行执行多个工具调用。
+
+        条目缺失字段或工具不可用将立即抛出异常；执行期间出错的任务会被收集在返回值的 `errors` 中。
+        `max_workers` 默认为任务数量。
+        """
+        ops_model = ToolOperations.from_raw(operations)
+        tasks = list(ops_model)
+        worker_count = max_workers or len(tasks)
+        results: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_map = {
+                executor.submit(
+                    getattr(self, task.tool),
+                    **(task.args or {}),
+                    **(task.kwargs or {}),
+                ): (idx, task.tool)
+                for idx, task in enumerate(tasks)
+            }
+            for future in as_completed(future_map):
+                idx, tool_name = future_map[future]
+                try:
+                    outcome = future.result()
+                    results.append({"index": idx, "tool": tool_name, "result": outcome})
+                except Exception as exc:
+                    errors.append({"index": idx, "tool": tool_name, "error": str(exc)})
+
+        results.sort(key=lambda item: item["index"])
+        errors.sort(key=lambda item: item["index"])
+        return {
+            "tool": "run_tools_parallel",
+            "workers": worker_count,
+            "results": results,
+            "errors": errors,
+        }
+
     def list_dir(self, path: str = ".") -> Dict[str, Any]:
         """列出目录内容。"""
         target = self._resolve_path(path)
@@ -268,6 +336,50 @@ class SWEFileSystemTools:
             raise SWEAgentToolError(f"追加文件失败: {exc}") from exc
         return f"已追加内容到: {self._relative_to_root(target)}"
 
+    def search_replace(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+    ) -> Dict[str, Any]:
+        """在指定文件中执行一次唯一的字符串替换。
+
+        要求调用方提供足够长的上下文确保 ``old_string`` 在文件内只出现一次，
+        否则会抛出 ``SWEAgentToolError``；如果成功，将替换首个匹配并写回原文件。
+        """
+        if not old_string:
+            raise SWEAgentToolError("old_string 不能为空")
+        if old_string == new_string:
+            raise SWEAgentToolError("new_string 必须与 old_string 不同")
+
+        target = self._resolve_path(file_path)
+        if target.is_dir():
+            raise SWEAgentToolError("目标是目录，无法执行替换")
+
+        try:
+            content = target.read_text(encoding=self.encoding)
+        except OSError as exc:
+            raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
+
+        occurrences = content.count(old_string)
+        if occurrences == 0:
+            raise SWEAgentToolError("未找到 old_string 对应内容，请检查上下文是否精确匹配")
+        if occurrences > 1:
+            raise SWEAgentToolError("old_string 在文件中出现超过一次，请提供更精确的上下文以确保唯一性")
+
+        updated = content.replace(old_string, new_string, 1)
+
+        try:
+            target.write_text(updated, encoding=self.encoding)
+        except OSError as exc:
+            raise SWEAgentToolError(f"写入文件失败: {exc}") from exc
+
+        return {
+            "tool": "search_replace",
+            "path": self._relative_to_root(target),
+            "replacements": 1,
+        }
+
     def search_text(
         self,
         pattern: str,
@@ -327,6 +439,128 @@ class SWEFileSystemTools:
     def run_tests(self, command: str = "pytest -q", timeout: Optional[int] = None) -> Dict[str, Any]:
         """执行测试命令，默认使用pytest。"""
         return self.run_command(command, timeout=timeout)
+
+    def _strip_md_fences(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            first_nl = stripped.find("\n")
+            last_fence = stripped.rfind("\n```")
+            if first_nl != -1 and last_fence != -1 and last_fence > first_nl:
+                return stripped[first_nl + 1:last_fence]
+        return text
+
+    def _split_placeholder_segments(self, text: str) -> Optional[Tuple[List[str], List[str]]]:
+        lines = text.splitlines(keepends=True)
+        segments: List[str] = []
+        tokens: List[str] = []
+        buffer: List[str] = []
+        for line in lines:
+            if self.PLACEHOLDER_LINE_RE.match(line.strip("\r\n")):
+                segments.append("".join(buffer))
+                tokens.append(line)
+                buffer = []
+            else:
+                buffer.append(line)
+        segments.append("".join(buffer))
+        return (segments, tokens) if tokens else None
+
+    def _locate_anchor(self, haystack: str, needle: str, start: int) -> int:
+        if not needle:
+            return -1
+        direct = haystack.find(needle, start)
+        if direct != -1:
+            return direct
+        for line in needle.splitlines():
+            piece = line.strip()
+            if not piece:
+                continue
+            idx = haystack.find(piece, start)
+            if idx != -1:
+                return idx
+        return -1
+
+
+    def edit_file(self, target_file: str, instructions: str, code_edit: str) -> Dict[str, Any]:
+        """用于创建或更新单个文件（请务必将 `target_file` 作为首个参数传入）。
+            - `instructions` 必须由第一人称一句话组成，用来明确你打算进行的修改，如“我将更新处理函数以记录错误”。保持简短有助于下游模型正确理解意图。
+            - 在 `code_edit` 中提供完整编辑内容，支持两种写法：
+
+            1. **完整重写**：提供目标文件的全部内容（允许使用 Markdown 代码块包裹）。文件会被按给出的文本直接创建或覆盖。
+            2. **片段编辑**：尽量减少未修改文本，并使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。请提供足够的上下文以便唯一定位每段修改，若无法匹配将抛出错误并提示补充上下文或改用 diff。
+
+            - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
+            - 修改同一文件应集中在一次 `edit_file` 调用中；如需编辑多个文件，请并行发起多次调用，每次对应一个文件。
+            - `target_file` 建议使用工作区内的相对路径，也支持绝对路径（会保持原值）。
+
+            成功时返回执行元信息（模式、写入字节等）；若无法安全应用，抛出 `SWEAgentToolError`。
+        """
+        if not code_edit or not code_edit.strip():
+            raise SWEAgentToolError("code_edit 不能为空")
+
+        cleaned = self._strip_md_fences(code_edit)
+
+        placeholder_data = self._split_placeholder_segments(cleaned)
+        target_path = self._resolve_path(target_file, allow_nonexistent=True)
+        relative = self._relative_to_root(target_path)
+
+        if placeholder_data:
+            segments, placeholders = placeholder_data
+            if not target_path.exists():
+                raise SWEAgentToolError("目标文件不存在，无法根据占位符合并片段")
+            try:
+                original = target_path.read_text(encoding=self.encoding)
+            except OSError as exc:
+                raise SWEAgentToolError(f"读取原文件失败: {exc}") from exc
+
+            merged_parts: List[str] = []
+            position = 0
+            total_segments = len(segments)
+
+            for idx, segment in enumerate(segments):
+                if segment:
+                    merged_parts.append(segment)
+                    anchor = self._locate_anchor(original, segment, position)
+                    if anchor != -1:
+                        position = anchor + len(segment)
+
+                if idx < len(placeholders):
+                    next_segment = segments[idx + 1] if idx + 1 < total_segments else ""
+                    if next_segment:
+                        anchor = self._locate_anchor(original, next_segment, position)
+                        if anchor == -1:
+                            raise SWEAgentToolError(
+                                "无法定位占位符上下文，请提供更多上下文。"
+                            )
+                        merged_parts.append(original[position:anchor])
+                        position = anchor
+                    else:
+                        merged_parts.append(original[position:])
+                        position = len(original)
+
+            final_content = "".join(merged_parts)
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(final_content, encoding=self.encoding)
+            except OSError as exc:
+                raise SWEAgentToolError(f"写入文件失败: {exc}") from exc
+
+            return {
+                "tool": "edit_file",
+                "mode": "merge",
+                "instructions": instructions,
+                "target_file": relative,
+                "bytes": len(final_content.encode(self.encoding)),
+            }
+
+        message = self.write_file(relative, cleaned, create_parents=True)
+        return {
+            "tool": "edit_file",
+            "mode": "write",
+            "instructions": instructions,
+            "target_file": relative,
+            "message": message,
+            "bytes": len(cleaned.encode(self.encoding)),
+        }
 
     # TODO: fix bug
     def apply_patch(self, patch: str, timeout: Optional[int] = None) -> Dict[str, Any]:
@@ -492,9 +726,12 @@ class SWEAgent(Agent):
             self.toolset.write_file,
             self.toolset.append_file,
             self.toolset.search_text,
+            self.toolset.search_replace,
             self.toolset.run_command,
             self.toolset.run_tests,
-            self.toolset.apply_patch,
+            # self.toolset.apply_patch,
+            self.toolset.edit_file,
+            self.toolset.run_tools_parallel
         ]
 
     def build_prompt(

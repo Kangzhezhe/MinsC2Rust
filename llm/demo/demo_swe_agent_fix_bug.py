@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from llm.llm import LLM  # type: ignore[import-not-found]  # noqa: E402
 from llm.swe_agent import SWEAgent  # type: ignore[import-not-found]  # noqa: E402
+from llm.memory import SlidingWindowStrategy
 
 
 def prepare_fix_workspace() -> Path:
@@ -55,7 +56,7 @@ def prepare_fix_workspace() -> Path:
             import math
             from app import divide
             def test_divide_precise():
-                asert divide(9, 4) == 2.25
+                assert divide(9, 4) == 2.25
 
             def test_divide_negative():
             assert math.isclose(divide(-9, 4), -2.25, rel_tol=1e-9)
@@ -116,14 +117,14 @@ def demonstrate_fixing1(agent: SWEAgent, max_rounds: int = 5) -> None:
 
             期望你：
             1. 先read_file读取错误的文件诊断失败根因并说明修改理由；
-            2. 使用 patch 工具修复相关代码，保持改动最小；
+            2. 使用 edit_file 工具修复相关代码，保持改动最小；
             """
         ).strip()
 
         response = agent.run_task(
             task_description,
             acceptance_criteria=[
-                "必须使用 patch 提交修复代码",
+                "必须使用 edit_file 提交修复代码",
                 # "重新运行 PYTHONPATH=. pytest -q 并通过",
             ],
             repo_context="这是一个最小化示例项目，位于 swe_agent_fix_workspace。",
@@ -147,9 +148,9 @@ def demonstrate_fixing(agent: SWEAgent, max_rounds: int = 5) -> None:
     response = agent.run_task(
         task_description,
         acceptance_criteria=[
-            "使用 patch 修复代码",
-            "重新运行 PYTHONPATH=. pytest -q 并通过",
-            "所有测试用例通过"
+            "修复代码中的所有bug",
+            "修改之后运行一次 PYTHONPATH=. pytest -q 并通过",
+            "确保所有测试用例通过则结束"
         ],
         repo_context="这是一个最小化示例项目，位于 swe_agent_fix_workspace。",
     )
@@ -167,8 +168,11 @@ def main() -> None:
     agent = SWEAgent(
         workspace_root=workspace,
         llm_instance=llm,
-        max_iterations=20,
+        max_iterations=30,
         command_timeout=90,
+        # memory_strategy={"name": "slidingwindow", "max_messages": 5},
+        # memory_strategy={"name": "tokenlimit", "max_tokens": 5000},
+        memory_strategy={"name": "summary"},
     )
 
     print("SWEAgent 代码修复演示")

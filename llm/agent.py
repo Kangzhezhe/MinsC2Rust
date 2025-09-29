@@ -33,6 +33,8 @@ class Agent:
         max_consecutive_tools=None,
         mcp_configs=None,
         llm_instance: Optional[LLM] = None,
+        memory_strategy=None,
+        memory_options: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化智能代理
@@ -45,13 +47,23 @@ class Agent:
             max_iterations: 最大迭代次数，防止无限循环
             max_consecutive_tools: 最多连续工具调用次数
             mcp_configs: MCP服务器配置列表
+            memory_strategy: 对话记忆策略配置
+            memory_options: 记忆策略的额外参数
         """
-        self.llm = llm_instance or LLM(
-            model=model,
-            temperature=temperature,
-            logger=logger,
-            mcp_configs=mcp_configs,
-        )
+        if llm_instance:
+            self.llm = llm_instance
+            if memory_strategy is not None and hasattr(self.llm, "set_memory_strategy"):
+                self.llm.set_memory_strategy(memory_strategy, **(memory_options or {}))
+        else:
+            self.llm = LLM(
+                model=model,
+                temperature=temperature,
+                logger=logger,
+                history_len=history_len,
+                mcp_configs=mcp_configs,
+                memory_strategy=memory_strategy,
+                memory_options=memory_options,
+            )
         self.tools = {}
         self.tool_caller = None
         self.max_iterations = max_iterations
@@ -130,7 +142,7 @@ class Agent:
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
                     # 连续工具调用过多，要求提供最终答案
                     tool_context = self._build_tool_context(result["tool_calls"])
-                    effective_prompt = f"{current_prompt}\n\n{tool_context}\n\n你已经调用了多个工具，请基于以上所有工具调用结果，直接提供最终答案，不要再次调用工具。"
+                    effective_prompt = f"{current_prompt}\n\n{tool_context}\n\n你已经调了多个工具，请基于以上所有工具调用结果，直接提供最终答案，不要再次调用工具。"
                 else:
                     # 正常对话，可以继续调用工具
                     if result["tool_calls"]:
@@ -298,12 +310,15 @@ class Agent:
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
                     # 连续工具调用过多，要求提供最终答案
                     tool_context = self._build_tool_context(result["tool_calls"])
-                    effective_prompt = f"{current_prompt}\n\n{tool_context}\n\n你已经调用了多个工具，请基于以上所有工具调用结果，直接提供最终答案，不要再次调用工具。"
+                    effective_prompt = f"{current_prompt}\n\n{tool_context}\n\
+你已经调用了多个工具，请基于以上所有工具调用结果，直接提供最终答案，不要再次调用工具。"
                 else:
                     # 正常对话，可以继续调用工具
                     if result["tool_calls"]:
                         tool_context = self._build_tool_context(result["tool_calls"])
-                        effective_prompt = f"{current_prompt}\n\n{tool_context}\n\n首先你需要思考是否需要更多信息，如果需要则继续调用工具，如果信息足够则基于现有结果给出最终回答，不要询问用户是否确认，不要重复调用相同的工具。注意：如果回答的不是工具则终止对话并给出最终答案，如果你认为还没有足够信息，请必须调用工具。"
+                        effective_prompt = f"{current_prompt}\n\n{tool_context}\n\
+首先你需要思考是否需要更多信息，如果需要则继续调用工具，返回类型为(tool_call)。\n\
+如果信息足够回答则基于现有信息给出最终回答返回类型为(str)，不要询问用户是否确认，不要重复调用相同的工具和相同参数。"
                     else:
                         effective_prompt = current_prompt
                 
@@ -402,6 +417,7 @@ class Agent:
         """从LLM输出中提取工具参数"""
         try:
             if caller:
+                llm_output = caller._normalize_toolcall_output(llm_output)
                 parsed = caller.parser.validate(llm_output)
                 if parsed.get('success', False):
                     return parsed["data"].get("args", {})
@@ -415,10 +431,20 @@ class Agent:
             return ""
         
         context = "已执行的工具调用及结果:\n"
+        context_array=[]
         for i, call in enumerate(tool_calls, 1):
-            context += f"{i}. 调用工具 {call['name']}\n"
-            context += f"   参数: {call['args']}\n"
-            context += f"   结果: {call['result']}\n"
+            # context += f"{i}. 调用工具 {call}\n"
+            context_array.append(f"{i}. 调用工具 {call}\n")
+            # context += f"{i}. 调用工具 {call['name']}\n"
+            # context += f"   参数: {call['args']}\n"
+            # context += f"   结果: {call['result']}\n"
+
+        context_array = self.llm._apply_memory_strategy(context_array)
+        context_array = [
+            item if isinstance(item, str) else json.dumps(item['content'], ensure_ascii=False)
+            for item in context_array
+        ]
+        context+= "".join(context_array)
         
         return context
     
@@ -493,6 +519,8 @@ class Agent:
     def clear_history(self):
         """清空对话历史"""
         self.conversation_history.clear()
+        if hasattr(self.llm, "clear_history"):
+            self.llm.clear_history()
     
     def get_available_tools(self) -> List[str]:
         """获取可用工具列表"""
@@ -532,6 +560,8 @@ def create_agent_with_tools(tools: List[Callable], **kwargs) -> Agent:
             - max_consecutive_tools: 最多连续工具调用次数
             - mcp_configs: MCP服务器配置列表
             - llm_instance: 预先创建好的LLM实例（用于测试或自定义实现）
+            - memory_strategy: 记忆策略配置
+            - memory_options: 记忆策略的额外参数
     """
     agent = Agent(**kwargs)
     agent.register_tools(tools)

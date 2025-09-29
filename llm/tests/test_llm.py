@@ -24,6 +24,7 @@ def test_table_output():
     llm = LLM()
     table_parser = TableParser(TableModel, value_only=True)
     result = llm.call("请输出10行以上的表格内容。", parser=table_parser)
+    print(result)
     assert isinstance(result, dict)
     assert result.get("success", True)
     assert "table" in result.get("data", {})

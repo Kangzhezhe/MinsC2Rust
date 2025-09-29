@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 from llm.ENV import *
 import os
 import asyncio
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Callable
 
 if USE_LANGCHAIN:
     os.environ["LANGCHAIN_TRACING_V2"] = LANGCHAIN_TRACING_V2
@@ -19,6 +19,7 @@ from .template_parser.template_parser import TemplateParser, MyModel
 from .template_parser.table_parser import TableModel, TableParser
 from langchain_core.callbacks import BaseCallbackHandler
 from .tool_call import LLMToolCaller
+from .memory import BaseMemoryStrategy, create_memory_strategy
 
 
 # 尝试导入MCP相关模块
@@ -38,7 +39,16 @@ class CustomCallbackHandler(BaseCallbackHandler):
         print(f"输出：{response.generations[0][0].text}")
 
 class LLM:
-    def __init__(self, model=None, temperature=0.3, history_len=0, logger=False, mcp_configs=None):
+    def __init__(
+        self,
+        model=None,
+        temperature=0.3,
+        history_len=0,
+        logger=False,
+        mcp_configs=None,
+        memory_strategy: Optional[Union[str, Dict[str, Any], BaseMemoryStrategy]] = None,
+        memory_options: Optional[Dict[str, Any]] = None,
+    ):
         """
         初始化LLM类，支持传统工具调用和MCP工具调用
         
@@ -59,6 +69,7 @@ class LLM:
         self.history = []
         self.history_len = history_len
         self.logger = logger
+        self.memory_strategy: Optional[BaseMemoryStrategy] = None
         
         # MCP支持
         self.mcp_caller = None
@@ -67,6 +78,63 @@ class LLM:
         
         if mcp_configs and MCP_AVAILABLE:
             self.mcp_caller = MCPToolCaller(mcp_configs)
+
+        memory_options = memory_options or {}
+        if memory_strategy is not None:
+            self.set_memory_strategy(memory_strategy, **memory_options)
+
+    def _default_summarize_text(self, prompt: str) -> str:
+        """使用底层 ChatOpenAI 模型生成摘要。"""
+        result = self.llm.invoke([{"role": "user", "content": prompt}])
+        if hasattr(result, "content"):
+            return str(result.content).strip()
+        if isinstance(result, dict) and "content" in result:
+            return str(result["content"]).strip()
+        return str(result).strip()
+
+    def set_memory_strategy(
+        self,
+        strategy: Optional[Union[str, Dict[str, Any], BaseMemoryStrategy]],
+        **kwargs: Any,
+    ) -> None:
+        """配置对话记忆策略。"""
+
+        if strategy is None:
+            self.memory_strategy = None
+            return
+
+        extra = dict(kwargs)
+        summarizer = extra.pop("summarizer", None) or self._default_summarize_text
+        token_counter = extra.pop("token_counter", None)
+
+        self.memory_strategy = create_memory_strategy(
+            strategy,
+            summarizer=summarizer,
+            token_counter=token_counter,
+            **extra,
+        )
+
+        if self.memory_strategy is not None:
+            self.memory_strategy.reset()
+
+    def _apply_memory_strategy(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        if not self.memory_strategy:
+            return messages
+        try:
+            return self.memory_strategy.process(messages)
+        except Exception as exc:
+            if self.logger:
+                print(f"记忆策略处理失败，已回退到原始消息: {exc}")
+            return messages
+
+    def clear_history(self) -> None:
+        """清空历史并重置记忆策略状态。"""
+
+        self.history.clear()
+        if self.memory_strategy:
+            self.memory_strategy.reset()
 
     async def init_mcp(self):
         """初始化MCP连接（异步）"""
@@ -162,10 +230,13 @@ class LLM:
         messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
         
         # 历史对话
+        history_slice: List[Dict[str, str]] = []
         if self.history_len > 0:
-            for item in self.history[-self.history_len:]:
-                messages.append({"role": "user", "content": item['prompt']})
-                messages.append({"role": "assistant", "content": item['response']})
+            history_slice = self.history[-self.history_len:]
+
+        for item in history_slice:
+            messages.append({"role": "user", "content": item['prompt']})
+            messages.append({"role": "assistant", "content": item['response']})
         
         # 当前用户消息
         user_content = prompt
@@ -177,6 +248,8 @@ class LLM:
         
         messages.append({"role": "user", "content": user_content})
         
+        if self.history_len > 0 and self.memory_strategy:
+            messages = self._apply_memory_strategy(messages)
         return messages
 
     def _invoke_llm(self, full_prompt, **kwargs):
@@ -434,7 +507,7 @@ if __name__ == "__main__":
 
             if MCP_AVAILABLE and mcp_configs:
                 print("\n=== MCP工具调用示例 ===")
-                mcp_result = llm.call("请帮我计算 10 * 2", use_mcp=True)
+                mcp_result = await llm.call_async("请帮我计算 10 * 2", use_mcp=True)
                 print(f"MCP工具结果: {mcp_result}")
 
                 print("\n=== 可用工具列表 ===")

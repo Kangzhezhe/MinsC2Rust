@@ -65,7 +65,7 @@ class MCPToolCaller:
         # 构建通用的 template parser，用于解析 LLM 输出中的 tool_call
         # 使用通用的 args:json，能兼容不同工具的参数结构
         try:
-            template = '{"tool_call": {"name": {name:str}, "args": {args:json}}}'
+            template = '{"tool_call":{"name":{name:str},"args":{args:json}}}'
             self.parser = TemplateParser(template)
         except Exception:
             # 解析器不可用时，继续使用回退的简单解析器

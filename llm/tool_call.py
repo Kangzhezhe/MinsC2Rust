@@ -66,7 +66,7 @@ def build_tool_template(tool_names, param_models):
         args_examples.append(
             f'{tool_name}的args为: {{{param_model.__name__}}}'
         )
-    template = '{"tool_call": {"name": {name:str}, "args": {args:json:对应工具参数Model}}}'
+    template = '{"tool_call":{"name":{name:str},"args":{args:json:对应工具参数Model}}}'
     example = '\n'.join(args_examples)
     return template, example
 
@@ -94,6 +94,7 @@ class LLMToolCaller:
             + "注意：如果没有任何一个工具能满足你的需求，请直接按原来的要求回复原始内容，不要调用 tool_call, 忽略以下内容，不要在回答中提到工具这件事。\n"
             + "注意：一次只允许调用一个工具，如果回答中包含了多个工具调用，只会执行第一个\n"
             + self.parser.get_format_instructions()
+            + "注意：当需要调用工具时，严格按上面的模板原样返回（仅name与args为变量），其他内容为字符串，禁止任何格式化或装饰：\n"
             + "\n不同工具的args示例：\n" + self.example
         )
         tool_docs = []
@@ -103,8 +104,56 @@ class LLMToolCaller:
         if tool_docs:
             self.instructions += "\n\n工具说明：\n" + "\n".join(tool_docs)
 
+    def _normalize_toolcall_output(self, text: str) -> str:
+        t = text.strip()
+
+        # 去除常见代码块围栏 ``` / ```json
+        if t.startswith("```"):
+            lines = t.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            t = "\n".join(lines).strip()
+
+        # 尝试严格 JSON 解析
+        obj = None
+        try:
+            obj = json.loads(t)
+        except Exception:
+            # 宽松修复（如未安装可忽略）
+            try:
+                from json_repair import loads as repair_loads
+                obj = repair_loads(t)
+            except Exception:
+                return text  # 保持原样
+
+        if not isinstance(obj, dict):
+            return text
+
+        # 兼容两种顶层结构
+        data = obj.get("tool_call", obj if ("name" in obj and "args" in obj) else None)
+        if not isinstance(data, dict):
+            return text
+
+        name = data.get("name")
+        args = data.get("args", {})
+
+        # args 可能是字符串，尝试解析为对象
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                # 保持字符串，让模板解析时再处理
+                pass
+
+        # 重新序列化为紧凑格式，键顺序固定为 tool_call -> name -> args
+        normalized = {"tool_call": {"name": name, "args": args}}
+        return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+
     def call(self, llm_output):
         try:
+            llm_output = self._normalize_toolcall_output(llm_output)
             parsed = self.parser.validate(llm_output)
             if not parsed.get('success', False):
                 return None, None
