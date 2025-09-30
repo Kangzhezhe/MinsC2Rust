@@ -35,6 +35,7 @@ class Agent:
         llm_instance: Optional[LLM] = None,
         memory_strategy=None,
         memory_options: Optional[Dict[str, Any]] = None,
+        redundant_tool_call_limit: int = 5,
     ):
         """
         初始化智能代理
@@ -49,6 +50,7 @@ class Agent:
             mcp_configs: MCP服务器配置列表
             memory_strategy: 对话记忆策略配置
             memory_options: 记忆策略的额外参数
+            redundant_tool_call_limit: 检测重复工具调用的阈值，连续达到该次数时强制进入最终回答
         """
         if llm_instance:
             self.llm = llm_instance
@@ -71,6 +73,9 @@ class Agent:
             self.max_consecutive_tools = max_iterations - 1
         else:
             self.max_consecutive_tools = max_consecutive_tools
+        if redundant_tool_call_limit < 2:
+            raise ValueError("redundant_tool_call_limit 必须大于等于 2")
+        self.redundant_tool_call_limit = redundant_tool_call_limit
         self.conversation_history = []
         self.mcp_configs = mcp_configs
         self.history_len = history_len
@@ -130,13 +135,23 @@ class Agent:
             current_prompt = prompt
             iteration = 0
             consecutive_tool_calls = 0
+            force_final_answer = False
+            final_answer_notice = ""
             
             while iteration < self.max_iterations:
                 iteration += 1
                 result["iterations"] = iteration
                 
                 # 构建当前轮次的提示词
-                if iteration == 1:
+                if force_final_answer:
+                    tool_context = self._build_tool_context(result["tool_calls"])
+                    notice = final_answer_notice or "⚠️ 检测到你已连续多次重复调用相同工具，请基于已有信息直接提供最终答案，禁止再次调用工具。"
+                    segments = [current_prompt]
+                    if tool_context:
+                        segments.append(tool_context)
+                    segments.append(notice)
+                    effective_prompt = "\n\n".join(segment for segment in segments if segment)
+                elif iteration == 1:
                     # 第一次调用，使用原始提示词
                     effective_prompt = current_prompt
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
@@ -173,7 +188,7 @@ class Agent:
                         effective_prompt = current_prompt
                 
                 # 决定本轮是否允许工具调用
-                allow_tools_this_round = True
+                allow_tools_this_round = not force_final_answer
                 if iteration >= self.max_iterations:
                     # 到了最后一轮，不再允许工具调用
                     allow_tools_this_round = False
@@ -223,6 +238,17 @@ class Agent:
                     
                     # 增加连续工具调用计数
                     consecutive_tool_calls += 1
+
+                    if not force_final_answer and self._is_redundant_tool_pattern(result["tool_calls"]):
+                        tool_name = tool_call_info["name"]
+                        args = tool_call_info.get("args", {}) or {}
+                        if args:
+                            args_desc = ", ".join(f"{k}={v}" for k, v in args.items())
+                            final_answer_notice = f"⚠️ 检测到你已连续多次调用工具 {tool_name}({args_desc})，请基于已有信息直接提供最终答案，禁止再次调用工具。"
+                        else:
+                            final_answer_notice = f"⚠️ 检测到你已连续多次调用工具 {tool_name}，请基于已有信息直接提供最终答案，禁止再次调用工具。"
+                        force_final_answer = True
+                        consecutive_tool_calls = self.max_consecutive_tools
                     
                     # 如果是最后一次迭代，直接返回工具结果
                     if iteration >= self.max_iterations:
@@ -298,13 +324,23 @@ class Agent:
             current_prompt = prompt
             iteration = 0
             consecutive_tool_calls = 0
+            force_final_answer = False
+            final_answer_notice = ""
             
             while iteration < self.max_iterations:
                 iteration += 1
                 result["iterations"] = iteration
                 
                 # 构建当前轮次的提示词
-                if iteration == 1:
+                if force_final_answer:
+                    tool_context = self._build_tool_context(result["tool_calls"])
+                    notice = final_answer_notice or "⚠️ 检测到你已连续多次重复调用相同工具，请基于已有信息直接提供最终答案，禁止再次调用工具。"
+                    segments = [current_prompt]
+                    if tool_context:
+                        segments.append(tool_context)
+                    segments.append(notice)
+                    effective_prompt = "\n\n".join(segment for segment in segments if segment)
+                elif iteration == 1:
                     # 第一次调用，使用原始提示词
                     effective_prompt = current_prompt
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
@@ -325,7 +361,7 @@ class Agent:
                 # 决定本轮是否允许工具调用：
                 # 如果当前是最后一次迭代（即 iteration == max_iterations），
                 # 则不允许再调用任何工具，让模型直接基于已有上下文给出最终答案。
-                allow_tools_this_round = True
+                allow_tools_this_round = not force_final_answer
                 if iteration >= self.max_iterations:
                     # 到了最后一轮，不再允许工具调用
                     allow_tools_this_round = False
@@ -376,6 +412,17 @@ class Agent:
                     
                     # 增加连续工具调用计数
                     consecutive_tool_calls += 1
+
+                    if not force_final_answer and self._is_redundant_tool_pattern(result["tool_calls"]):
+                        tool_name = tool_call_info["name"]
+                        args = tool_call_info.get("args", {}) or {}
+                        if args:
+                            args_desc = ", ".join(f"{k}={v}" for k, v in args.items())
+                            final_answer_notice = f"⚠️ 检测到你已连续多次调用工具 {tool_name}({args_desc})，请基于已有信息直接提供最终答案，禁止再次调用工具。"
+                        else:
+                            final_answer_notice = f"⚠️ 检测到你已连续多次调用工具 {tool_name}，请基于已有信息直接提供最终答案，禁止再次调用工具。"
+                        force_final_answer = True
+                        consecutive_tool_calls = self.max_consecutive_tools
                     
                     # 如果是最后一次迭代，直接返回工具结果
                     if iteration >= self.max_iterations:
@@ -425,6 +472,21 @@ class Agent:
             pass
         return {}
     
+    def _is_redundant_tool_pattern(self, tool_calls: List[Dict]) -> bool:
+        """检测最近的工具调用是否出现重复模式。"""
+        limit = getattr(self, "redundant_tool_call_limit", None)
+        if len(tool_calls) < limit or limit is None:
+            return False
+        recent = tool_calls[-limit:]
+        first_name = recent[0].get("name")
+        first_args = recent[0].get("args", {}) or {}
+        for call in recent[1:]:
+            if call.get("name") != first_name:
+                return False
+            if (call.get("args", {}) or {}) != first_args:
+                return False
+        return True
+
     def _build_tool_context(self, tool_calls: List[Dict]) -> str:
         """构建工具调用上下文"""
         if not tool_calls:

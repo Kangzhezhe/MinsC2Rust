@@ -25,7 +25,7 @@ add_library(adt STATIC
    src/utf8-decoder.c
 )
 target_include_directories(adt PRIVATE src test)
-# add_compile_definitions(ALLOC_TESTING)
+add_compile_definitions(ALLOC_TESTING)
 
 function(add_adt_test suffix)
   add_executable(test-${suffix} test/test-${suffix}.c test/framework.c test/alloc-testing.c)

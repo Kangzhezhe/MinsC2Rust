@@ -237,6 +237,7 @@ async def _test_llm_mcp_connect():
 
     agent = Agent(mcp_configs=[config],max_iterations=10)
     output = await agent.chat_async('帮我查一下华中科技大学到中南财经政法大学的路线',use_mcp=True)
+    print(f"Tool调用结果: {output.get('tool_calls', [])}")
     print(f"LLM调用结果: {output['final_response']}")
 
 

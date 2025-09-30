@@ -7,7 +7,7 @@ import tempfile
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from pydantic import BaseModel,Field, RootModel
 
@@ -237,10 +237,141 @@ class SWEFileSystemTools:
             if entry.is_file():
                 try:
                     entry_info["size"] = entry.stat().st_size
+                    entry_info["lines"] = sum(1 for _ in entry.open("r", encoding=self.encoding, errors="ignore"))
                 except OSError:
                     entry_info["size"] = None
+                    entry_info["lines"] = None
             entries.append(entry_info)
         return {"path": self._relative_to_root(target), "entries": entries}
+
+    def file_search(self, query: str, max_results: int = 20) -> Dict[str, Any]:
+        """按照 glob 模式搜索工作区内的文件或目录。
+
+        使用示例::
+
+            # 搜索所有 Python 源文件（最多返回 20 条）
+            toolset.file_search("**/*.py")
+
+            # 搜索 src 目录下的 C 文件，最多返回 10 条
+            toolset.file_search("src/**/*.c", max_results=10)
+
+        :param query: 需要匹配的 glob 模式，例如 ``src/**/*.py``。
+        :param max_results: 返回的最大结果数，默认 20，必须为正数。
+        """
+
+        if not query or not query.strip():
+            raise SWEAgentToolError("query 不能为空")
+        if max_results <= 0:
+            raise SWEAgentToolError("max_results 必须是正整数")
+
+        normalized_query = query.strip()
+        seen: Set[Path] = set()
+        matches: List[Dict[str, Any]] = []
+
+        candidates = sorted(self._workspace_root.glob(normalized_query))
+
+        for candidate in candidates:
+            resolved = candidate.resolve(strict=False)
+            if not self._is_within_root(resolved):
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            matches.append(
+                {
+                    "path": self._relative_to_root(resolved),
+                    "type": "directory" if resolved.is_dir() else "file",
+                }
+            )
+            if len(matches) >= max_results:
+                break
+
+        return {"pattern": normalized_query, "matches": matches, "limit": max_results}
+
+    def grep_search(
+        self,
+        query: str,
+        includePattern: Optional[str] = None,
+        isRegexp: bool = False,
+        max_results: int = 20,
+    ) -> Dict[str, Any]:
+        """在工作区内执行快速文本搜索。
+
+        使用示例::
+
+            # 精确查找 README 中的 "TODO"
+            toolset.grep_search("TODO", includePattern="README.md")
+
+            # 在 C 源文件中用正则匹配函数定义（最多 20 条结果）
+            toolset.grep_search(r"^int\\s+main", includePattern="src/**/*.c", isRegexp=True)
+
+        :param query: 要搜索的文本或正则表达式，不能为空。
+        :param includePattern: 可选的 glob 模式，仅在匹配的文件中搜索；默认遍历全部文件。
+        :param isRegexp: 当为 True 时，按正则表达式处理 ``query``。
+        """
+
+        if not query or not query.strip():
+            raise SWEAgentToolError("query 不能为空")
+        if max_results <= 0:
+            raise SWEAgentToolError("max_results 必须是正整数")
+
+        normalized_query = query if isRegexp else query.strip()
+
+        try:
+            compiled: Optional[re.Pattern[str]] = re.compile(normalized_query) if isRegexp else None
+        except re.error as exc:
+            raise SWEAgentToolError(f"正则表达式无效: {exc}") from exc
+
+        if includePattern:
+            candidates = sorted(self._workspace_root.glob(includePattern))
+        else:
+            candidates = sorted(self._workspace_root.rglob("*"))
+
+        matches: List[Dict[str, Any]] = []
+        seen: Set[Path] = set()
+
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+
+            resolved = candidate.resolve(strict=False)
+            if resolved in seen:
+                continue
+            if not self._is_within_root(resolved):
+                continue
+            seen.add(resolved)
+
+            try:
+                with resolved.open("r", encoding=self.encoding, errors="ignore") as fh:
+                    for idx, line in enumerate(fh, start=1):
+                        haystack = line.rstrip("\n")
+                        matched = compiled.search(haystack) if compiled else (normalized_query in haystack)
+                        if matched:
+                            matches.append(
+                                {
+                                    "file": self._relative_to_root(resolved),
+                                    "line": idx,
+                                    "content": haystack,
+                                }
+                            )
+                            if len(matches) >= max_results:
+                                return {
+                                    "query": query,
+                                    "matches": matches,
+                                    "limit": max_results,
+                                    "pattern": includePattern,
+                                    "regex": isRegexp,
+                                }
+            except OSError:
+                continue
+
+        return {
+            "query": query,
+            "matches": matches,
+            "limit": max_results,
+            "pattern": includePattern,
+            "regex": isRegexp,
+        }
 
     def file_exists(self, path: str) -> bool:
         """判断文件或目录是否存在。"""
@@ -250,8 +381,8 @@ class SWEFileSystemTools:
     def read_file(
         self,
         path: str,
-        start_line: Optional[int] = None,
-        end_line: Optional[int] = None,
+        start_line: int,
+        end_line: int,
         max_bytes: int = 64_000,
     ) -> Dict[str, Any]:
         """读取文件内容，可选行范围截取。
@@ -259,7 +390,7 @@ class SWEFileSystemTools:
         返回信息包含：
         - ``path``：相对工作区根目录的路径；
         - ``content``：读取到的文本内容（可能被截断）；
-        - ``start_line`` / ``end_line``：当前片段在文件中的行号范围。
+        - ``start_line`` / ``end_line``：必须提供当前片段在文件中的行号范围。行以1开始计数。
         """
         target = self._resolve_path(path)
         if target.is_dir():
@@ -325,7 +456,7 @@ class SWEFileSystemTools:
         return f"已写入文件: {self._relative_to_root(target)}"
 
     def append_file(self, path: str, content: str, create_parents: bool = True) -> str:
-        """向文件追加内容。"""
+        """向文件追加内容。调用这个工具前必须先读取文件的末尾内容"""
         target = self._resolve_path(path, allow_nonexistent=True)
         if create_parents:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -380,34 +511,6 @@ class SWEFileSystemTools:
             "replacements": 1,
         }
 
-    def search_text(
-        self,
-        pattern: str,
-        path: str = ".",
-        case_sensitive: bool = False,
-        max_matches: int = 20,
-    ) -> Dict[str, Any]:
-        """递归搜索文本，返回匹配行。"""
-        compiled = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
-        base = self._resolve_path(path)
-        matches: List[Dict[str, Any]] = []
-        for file_path in self._iter_files(base):
-            try:
-                with file_path.open("r", encoding=self.encoding, errors="ignore") as fh:
-                    for idx, line in enumerate(fh, start=1):
-                        if compiled.search(line):
-                            matches.append(
-                                {
-                                    "file": self._relative_to_root(file_path),
-                                    "line": idx,
-                                    "content": line.rstrip("\n"),
-                                }
-                            )
-                            if len(matches) >= max_matches:
-                                return {"pattern": pattern, "matches": matches}
-            except OSError:
-                continue
-        return {"pattern": pattern, "matches": matches}
 
     def run_command(self, command: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """在仓库根目录下执行命令。"""
@@ -681,8 +784,8 @@ class SWEAgent(Agent):
         请严格遵循以下原则：
         1. 在分析问题前先查看相关文件与目录结构。
         2. 对代码改动前先确认复现步骤，并在修改后重新运行验证命令。
-        3. 每次修改需说明原因，并保持改动最小化，避免无关文件变化。
-        4. 输出时请总结解决方案、列出关键改动文件以及测试执行情况。
+        3. 如果有要求每次修改需说明原因，并保持改动最小化，避免无关文件变化。
+        4. 输出时请总结解决方案、列出关键改动文件以及当前测试执行情况。
         """
     ).strip()
 
@@ -721,14 +824,15 @@ class SWEAgent(Agent):
     def _default_tools(self) -> List[Any]:
         return [
             self.toolset.list_dir,
+            self.toolset.file_search,
             self.toolset.file_exists,
             self.toolset.read_file,
             self.toolset.write_file,
             self.toolset.append_file,
-            self.toolset.search_text,
+            self.toolset.grep_search,
             self.toolset.search_replace,
             self.toolset.run_command,
-            self.toolset.run_tests,
+            # self.toolset.run_tests,
             # self.toolset.apply_patch,
             self.toolset.edit_file,
             self.toolset.run_tools_parallel

@@ -46,19 +46,38 @@ def run_pytest(agent: SWEAgent) -> dict[str, str | int | bool]:
 
 
 
-def demonstrate_understanding(agent: SWEAgent, max_rounds: int = 5) -> None:
+def demonstrate_compile(agent: SWEAgent, max_rounds: int = 5) -> None:
     task_description = textwrap.dedent(
         f"""
-        我有一个项目需要你帮我理解它的结构和功能。
-
+        帮我编译并执行这个项目
         """
     ).strip()
 
     response = agent.run_task(
         task_description,
         acceptance_criteria=[
-            "请描述项目的核心工作流程。",
-            "如何运行这个项目，给出运行的命令。",
+            "将整个项目编译并执行",
+            "如果是一个库，编译并执行其测试用例，不论通不通过",
+            "总结编译和执行的结果"
+        ],
+    )
+
+    print("\n代理回复:")
+    print(response.get("tool_calls", []))
+    print(response["final_response"])
+
+def demonstrate_search(agent: SWEAgent, max_rounds: int = 5) -> None:
+    task_description = textwrap.dedent(
+        f"""
+        帮我搜索项目中的所有ArrayList 相关的函数
+        """
+    ).strip()
+
+    response = agent.run_task(
+        task_description,
+        acceptance_criteria=[
+            "列出所有包含 ArrayList 的文件和行号",
+            "总结这些函数的用途"
         ],
     )
 
@@ -83,7 +102,8 @@ def main() -> None:
     print("SWEAgent 代码理解演示")
     print(f"工作目录: {workspace}")
 
-    demonstrate_understanding(agent)
+    # demonstrate_search(agent)
+    demonstrate_compile(agent)
 
 
 if __name__ == "__main__":
