@@ -5,18 +5,18 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from pydantic import BaseModel,Field, RootModel
 
 from .agent import Agent
 
-import subprocess
-import tempfile
-import textwrap
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from analyzer.analyzer import Analyzer
 
 class ToolOperation(BaseModel):
     tool: str = Field(description='要调用的工具方法名')
@@ -50,6 +50,8 @@ class SWEFileSystemTools:
     command_timeout: int = 120
     max_output_chars: int = 12_000
     _workspace_root: Path = field(init=False, repr=False)
+    _symbol_analyzer: Optional[Analyzer] = field(default=None, init=False, repr=False)
+    _analyzer_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         root = Path(self.workspace_root).expanduser().resolve()
@@ -100,6 +102,53 @@ class SWEFileSystemTools:
         clipped = text[: self.max_output_chars]
         suffix = f"\n...（输出已截断，剩余 {len(text) - self.max_output_chars} 字符）"
         return clipped + suffix, True
+
+    def _get_analyzer(self) -> Analyzer:
+        with self._analyzer_lock:
+            if self._symbol_analyzer is not None:
+                return self._symbol_analyzer
+
+            try:
+                self._symbol_analyzer = Analyzer(project_root=str(self._workspace_root))
+            except FileNotFoundError as exc:
+                raise SWEAgentToolError(
+                    f"加载 analyzer 产物失败: {exc}"
+                ) from exc
+            except Exception as exc:  # pragma: no cover - 保护性兜底
+                raise SWEAgentToolError(
+                    f"初始化 Analyzer 失败: {exc}"
+                ) from exc
+
+            return self._symbol_analyzer
+
+    def _build_path_filter(
+        self, filePaths: Optional[List[str]]
+    ) -> Tuple[Callable[[str], bool], List[str]]:
+        if not filePaths:
+            return (lambda _rel: True), []
+
+        filters: List[Tuple[Path, bool]] = []
+        normalized: List[str] = []
+        for raw_path in filePaths:
+            resolved = self._resolve_path(raw_path, allow_nonexistent=False)
+            filters.append((resolved, resolved.is_dir()))
+            normalized.append(self._relative_to_root(resolved))
+
+        def matcher(rel_path: str) -> bool:
+            abs_path = (self._workspace_root / Path(rel_path)).resolve()
+            for base, is_dir in filters:
+                if is_dir:
+                    try:
+                        abs_path.relative_to(base)
+                        return True
+                    except ValueError:
+                        continue
+                else:
+                    if abs_path == base:
+                        return True
+            return False
+
+        return matcher, normalized
 
     def _normalize_patch(self, patch: str) -> Tuple[str, bool]:
         """调整补丁块头部的行数，避免因统计不准导致应用失败。"""
@@ -189,9 +238,7 @@ class SWEFileSystemTools:
         max_workers: Optional[int] = None,
     ) -> Dict[str, Any]:
         """并行执行多个工具调用。
-
-        条目缺失字段或工具不可用将立即抛出异常；执行期间出错的任务会被收集在返回值的 `errors` 中。
-        `max_workers` 默认为任务数量。
+        您能够在单次响应中调用多个工具。当需要获取多个独立信息时，请将工具调用批量处理以实现最优性能。例如使用可用的搜索工具来理解代码库和用户的查询。我们鼓励您广泛地并行或顺序使用搜索工具。
         """
         ops_model = ToolOperations.from_raw(operations)
         tasks = list(ops_model)
@@ -371,6 +418,173 @@ class SWEFileSystemTools:
             "limit": max_results,
             "pattern": includePattern,
             "regex": isRegexp,
+        }
+
+    def list_symbol_usages(
+        self,
+        symbolName: str,
+        max_results: int,
+        filePaths: Optional[List[str]] = None,
+        include_end_line: bool = True,
+    ) -> Dict[str, Any]:
+        """查找指定C语言符号的入边引用。
+
+        用法：
+        - 必填 `symbolName`，大小写敏感；可选 `filePaths`（相对路径或目录数组）限制搜索范围。
+        - `max_results` 控制返回的使用点数量（默认 200），`include_end_line` 决定片段是否包含结束行。
+        - 返回的 `usages` 中每一项包含：触发引用的文件、起止行、依赖类型、源符号信息以及片段文本。
+        - `filters` 字段回显路径过滤参数，`truncated=True` 表示结果已被数量上限截断。
+        """
+
+        symbol = (symbolName or "").strip()
+        if not symbol:
+            raise SWEAgentToolError("symbolName 不能为空")
+        if max_results <= 0:
+            raise SWEAgentToolError("max_results 必须是正整数")
+
+        analyzer = self._get_analyzer()
+        matches_path, normalized_filters = self._build_path_filter(filePaths)
+
+        usages: List[Dict[str, Any]] = []
+        truncated = False
+
+        symbol_refs = analyzer.find_symbols_by_name(symbol )
+        if not symbol_refs:
+            raise SWEAgentToolError(f"未在 analyzer 产物中找到符号: {symbol}")
+
+        file_cache: Dict[str, List[str]] = {}
+
+        for ref in symbol_refs:
+            target_key = ref.key()
+            nodes, edges = analyzer.get_dependencies(ref, depth=1, direction="in")
+            for edge in edges:
+                if edge.target != target_key:
+                    continue
+                src_sym = analyzer.get_symbol_by_key(edge.source)
+                if not src_sym:
+                    continue
+                if not matches_path(src_sym.file_path):
+                    continue
+
+                start_line = edge.start_line or edge.end_line or src_sym.start_line
+                end_line = edge.end_line or edge.start_line or src_sym.end_line
+                if not start_line or start_line < 1:
+                    start_line = 1
+                if not end_line or end_line < start_line:
+                    end_line = start_line
+                rel_file = src_sym.file_path
+                abs_file = (self._workspace_root / Path(rel_file)).resolve()
+                try:
+                    if rel_file not in file_cache:
+                        with abs_file.open("r", encoding=self.encoding, errors="ignore") as fh:
+                            file_cache[rel_file] = fh.readlines()
+                    lines = file_cache[rel_file]
+                    left = max(start_line - 1, 0)
+                    right = max(end_line - 1, left)
+                    slice_end = right + 1 if include_end_line else left + 1
+                    slice_end = min(max(slice_end, left + 1), len(lines))
+                    snippet_lines = lines[left:slice_end]
+                    snippet = "".join(snippet_lines).rstrip("\n")
+                except OSError:
+                    snippet = ""
+
+                usages.append(
+                    {
+                        "file": rel_file,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "dependency_type": edge.dep_type,
+                        "source_symbol": {
+                            "name": src_sym.name,
+                            "type": src_sym.type,
+                            "file": src_sym.file_path,
+                        },
+                        "snippet": snippet,
+                    }
+                )
+
+                if len(usages) >= max_results:
+                    truncated = True
+                    break
+            if truncated:
+                break
+
+        return {
+            "tool": "list_symbol_usages",
+            "symbol": symbol,
+            "usages": usages,
+            "limit": max_results,
+            "truncated": truncated,
+            "filters": normalized_filters,
+        }
+
+    def list_symbol_definitions(
+        self,
+        symbolName: str,
+        filePaths: Optional[List[str]] = None,
+        include_definition_text: bool = False,
+    ) -> Dict[str, Any]:
+        """查询C语言符号的定义位置。
+
+        用法：
+        - 提供 `symbolName`（必填），可用 `filePaths` 数组限制返回范围。
+        - 设定 `include_definition_text=True` 时，结果会携带 `definition`（及可选 `signature`）文本，适合生成参考片段。
+        - 返回 `definitions` 列表，每项包含文件路径、行号区间、符号类型以及可选的定义内容。
+        - `filters` 字段回显路径筛选参数，方便调用方确认范围。
+        """
+
+        symbol = (symbolName or "").strip()
+        if not symbol:
+            raise SWEAgentToolError("symbolName 不能为空")
+
+        analyzer = self._get_analyzer()
+        matches_path, normalized_filters = self._build_path_filter(filePaths)
+
+        symbol_refs = analyzer.find_symbols_by_name(symbol)
+        if not symbol_refs:
+            raise SWEAgentToolError(f"未在 analyzer 产物中找到符号: {symbol}")
+
+        definitions: List[Dict[str, Any]] = []
+        for ref in symbol_refs:
+            if not matches_path(ref.file_path):
+                continue
+            entry: Dict[str, Any] = {
+                "file": ref.file_path,
+                "start_line": ref.start_line,
+                "end_line": ref.end_line,
+                "type": ref.type,
+            }
+            if include_definition_text:
+                definition = ""
+                signature = ""
+                file_data = analyzer.analysis_data.get(ref.file_path) or {}
+                for item in file_data.get(ref.type, []) or []:
+                    if item.get("name") == ref.name:
+                        definition = (
+                            item.get("full_definition")
+                            or item.get("full_declaration")
+                            or item.get("text")
+                            or ""
+                        )
+                        signature = item.get("signature") or signature
+                        break
+                if not definition:
+                    try:
+                        definition = analyzer.extract_definition_text(ref)
+                    except Exception:
+                        definition = ""
+                definition = definition.replace("\r\n", "\n")
+                entry["definition"] = definition
+                if signature:
+                    entry["signature"] = signature.replace("\r\n", "\n")
+            definitions.append(entry)
+
+        return {
+            "tool": "list_symbol_definitions",
+            "symbol": symbol,
+            "definitions": definitions,
+            "filters": normalized_filters,
+            "include_definition_text": include_definition_text,
         }
 
     def file_exists(self, path: str) -> bool:
@@ -782,10 +996,11 @@ class SWEAgent(Agent):
         你是一名经验丰富的软件工程师助手（SWE-agent）。
         你可以使用提供的工具在仓库中浏览、搜索、修改文件，并运行命令或测试。
         请严格遵循以下原则：
-        1. 在分析问题前先查看相关文件与目录结构。
+        1. 在分析问题前先查看相关文件与目录结构搜索相关内容。如果你不确定问题所在，请多搜索、多阅读代码。
         2. 对代码改动前先确认复现步骤，并在修改后重新运行验证命令。
         3. 如果有要求每次修改需说明原因，并保持改动最小化，避免无关文件变化。
         4. 输出时请总结解决方案、列出关键改动文件以及当前测试执行情况。
+        5. 您能够在单次响应中调用多个工具。当需要获取多个独立信息时，请将工具调用批量处理以实现最优性能。
         """
     ).strip()
 
@@ -835,7 +1050,9 @@ class SWEAgent(Agent):
             # self.toolset.run_tests,
             # self.toolset.apply_patch,
             self.toolset.edit_file,
-            self.toolset.run_tools_parallel
+            self.toolset.run_tools_parallel,
+            self.toolset.list_symbol_usages,
+            self.toolset.list_symbol_definitions,
         ]
 
     def build_prompt(

@@ -16,6 +16,11 @@ import warnings
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType, DependencyType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
 # Suppress matplotlib warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
 
@@ -471,10 +476,10 @@ class DependencyVisualizer:
 def main():
     """Main function (English)"""
     parser = argparse.ArgumentParser(description='Symbol Dependency Visualizer')
-    parser.add_argument('--deps-file', default='symbol_dependencies.json',
-                       help='Dependency JSON file path')
-    parser.add_argument('--output-dir', default='output',
-                       help='Output directory')
+    parser.add_argument('--deps-file', default=str(get_output_dir() / 'symbol_dependencies.json'),
+                       help='Dependency JSON file path（默认读取配置的输出目录）')
+    parser.add_argument('--output-dir', default=str(get_output_dir()),
+                       help='Output directory（默认写入配置的输出目录）')
     parser.add_argument('--symbol', help='Symbol name to visualize')
     parser.add_argument('--direction', choices=['forward', 'backward', 'both'], 
                        default='both', help='Dependency direction')

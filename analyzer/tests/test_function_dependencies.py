@@ -11,11 +11,18 @@ sys.path.insert(0, parent_dir)
 
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType, DependencyType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
+ANALYSIS_JSON = str(get_output_dir() / "c_project_analysis.json")
+
 def test_function_call_dependencies():
     """测试函数调用依赖关系识别"""
     print("=== 测试函数调用依赖关系识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 测试一些复杂的函数，它们应该调用其他函数
@@ -69,7 +76,7 @@ def test_recursive_dependencies():
     """测试递归依赖关系（函数调用自己）"""
     print("\n=== 测试递归依赖关系 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 分析所有函数，查找可能的递归调用
@@ -101,7 +108,7 @@ def test_cross_file_dependencies():
     """测试跨文件的函数调用依赖"""
     print("\n=== 测试跨文件函数调用依赖 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 找到test-binn.c中的测试函数，它们应该调用binn.c中的函数
@@ -154,7 +161,7 @@ def test_complex_function_dependencies():
     """测试复杂函数的完整依赖关系"""
     print("\n=== 测试复杂函数的完整依赖关系 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 选择一个复杂的函数进行详细分析

@@ -6,8 +6,8 @@
 
 llm_url = 'http://zy.dwz.ink:15499/v1'
 llm_api_key = 'sk-swycvBanfNoMRfJ74958144a8d5944BcAfD025910f059aCb'
-# llm_default_model = 'qwen32b'
-llm_default_model = 'Qwen3-Coder'
+llm_default_model = 'qwen32b'
+# llm_default_model = 'Qwen3-Coder'
 
 
 embedding_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1'

@@ -23,6 +23,9 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
+import re
+import subprocess
 from typing import Dict, List, Optional, Tuple, Iterable, Set, Literal
 
 try:  # 兼容直接脚本执行
@@ -61,6 +64,7 @@ class Analyzer:
     def __init__(
         self,
         analyzer_root: str = os.path.dirname(__file__),
+        project_root: Optional[str] = None,
         outputs_dir: Optional[str] = None,
     ) -> None:
         self.analyzer_root = analyzer_root
@@ -69,6 +73,9 @@ class Analyzer:
         self.path_analysis = os.path.join(self.outputs_dir, "c_project_analysis.json")
         self.path_topo = os.path.join(self.outputs_dir, "symbol_topo_order.json")
         self.path_deps = os.path.join(self.outputs_dir, "symbol_dependencies.json")
+
+        if project_root:
+            self.run_pipeline(project_root,self.outputs_dir) 
 
         # 基础数据
         self.analysis_data: Dict[str, dict] = {}
@@ -89,6 +96,39 @@ class Analyzer:
         self._build_symbol_index()
         self._load_topo()
         self._load_dependencies_if_available()
+
+    def run_pipeline(self, project_root: str, output_root: str) -> None:
+        """
+        执行一整套分析流程：
+
+        1. 更新 analyzer/config.yaml 的 project_root 与 output_root
+        2. 依次运行 c_project_analyzer.py、c_project_reconstructor.py、
+           symbol_dependency_analyzer.py、demo_visualization.py、
+           topo_sort_dependencies.py --node-type non_functions、symbol_batching.py
+        """
+        analyzer_dir = Path(self.analyzer_root).resolve()
+        config_path = analyzer_dir.parent / "analyzer_config.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+
+        text = config_path.read_text(encoding="utf-8")
+        text, ok_project = re.subn(r"^(project_root:\s*).*$", rf"\1{project_root}", text, flags=re.MULTILINE)
+        text, ok_output = re.subn(r"^(output_root:\s*).*$", rf"\1{output_root}", text, flags=re.MULTILINE)
+        if not (ok_project and ok_output):
+            raise ValueError("未在配置文件中找到 project_root 或 output_root 行")
+        config_path.write_text(text, encoding="utf-8")
+
+        commands = [
+            ["python", "c_project_analyzer.py"],
+            ["python", "c_project_reconstructor.py"],
+            ["python", "symbol_dependency_analyzer.py"],
+            ["python", "demo_visualization.py"],
+            ["python", "topo_sort_dependencies.py", "--node-type", "non_functions"],
+            ["python", "symbol_batching.py"],
+        ]
+
+        for cmd in commands:
+            subprocess.run(cmd, cwd=analyzer_dir, check=True)
 
     # ---------------------------- 加载阶段 ----------------------------
     def _load_analysis(self) -> None:

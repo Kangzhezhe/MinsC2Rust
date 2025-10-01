@@ -11,12 +11,19 @@ sys.path.insert(0, parent_dir)
 
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType, DependencyType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
+ANALYSIS_JSON = str(get_output_dir() / "c_project_analysis.json")
+
 def test_binn_create_type_dependencies():
     """测试binn_create_type函数的依赖关系提取"""
     print("=== 测试 binn_create_type 依赖关系提取 ===")
     
     # 创建分析器
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 找到binn_create_type函数
@@ -91,7 +98,7 @@ def analyze_macro_detection():
     """分析宏检测的准确性"""
     print(f"\n=== 宏检测分析 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     test_identifiers = ['APIENTRY', 'BINN_STORAGE_MIN', 'BINN_STORAGE_MAX', 'BINN_STORAGE_HAS_MORE', 

@@ -8,6 +8,7 @@
         "heman.h": "c",
         "hut.h": "c",
         "ht.h": "c",
-        "sortedarray.h": "c"
+        "sortedarray.h": "c",
+        "compare-int.h": "c"
     }
 }

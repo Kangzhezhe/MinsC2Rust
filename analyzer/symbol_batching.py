@@ -4,19 +4,20 @@
 基于文件拓扑排序结果进行文件级分块处理，支持并行转译规划。
 
 Usage:
-  python -m analyzer.symbol_batching \
-      --topo-order output/symbol_topo_order.json \
-      --dependencies output/symbol_dependencies.json \
-      --analysis output/c_project_analysis.json \
+    python -m analyzer.symbol_batching \
+            --topo-order <OUTPUT_DIR>/symbol_topo_order.json \
+            --dependencies <OUTPUT_DIR>/symbol_dependencies.json \
+            --analysis <OUTPUT_DIR>/c_project_analysis.json \
       --max-chars-per-batch 8000 \
       --batch-size 1 \
-      --output output/symbol_batches.json
+            --output <OUTPUT_DIR>/symbol_batches.json
 
 功能：
 1. 以文件为单位进行批处理，按照文件拓扑顺序
 2. 支持batch_size=1（每个batch一个文件）
 3. 根据字符数限制控制批次大小
 4. 分析批次间依赖关系，确定并行处理策略
+（默认路径从 ``analyzer_config.yaml`` 的 ``output_root`` 读取）
 """
 
 from __future__ import annotations
@@ -27,6 +28,13 @@ import os
 from collections import defaultdict, deque
 from typing import Dict, List, Set, Tuple, Optional
 from pathlib import Path
+
+try:  # 兼容脚本直接执行与包内导入
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from .config import get_output_dir
+
+_DEFAULT_OUTPUT_DIR = get_output_dir()
 
 
 def load_file_analysis(analysis_path: str) -> Dict[str, Dict]:
@@ -94,6 +102,15 @@ def create_file_to_cycle_group_mapping(cycle_groups: List[List[str]]) -> Dict[st
         for file_path in group:
             file_to_group[file_path] = group_id
     return file_to_group
+
+
+def create_symbol_to_cycle_group_mapping(cycle_groups: List[List[str]]) -> Dict[str, int]:
+    """创建符号到循环组的映射"""
+    symbol_to_group: Dict[str, int] = {}
+    for group_id, group in enumerate(cycle_groups):
+        for symbol_name in group:
+            symbol_to_group[symbol_name] = group_id
+    return symbol_to_group
 
 
 def create_file_batches(ordered_files: List[str], 
@@ -493,10 +510,10 @@ def main():
     parser = argparse.ArgumentParser(description="对文件进行分块处理，支持并行转译规划")
     
     # 输入文件
-    parser.add_argument("--topo-order", default="output/symbol_topo_order.json",
-                       help="拓扑排序结果文件（包含文件拓扑信息）")
-    parser.add_argument("--analysis", default="output/c_project_analysis.json",
-                       help="C项目分析结果文件")
+    parser.add_argument("--topo-order", default=str(_DEFAULT_OUTPUT_DIR / "symbol_topo_order.json"),
+                       help="拓扑排序结果文件（默认读取配置的输出目录）")
+    parser.add_argument("--analysis", default=str(_DEFAULT_OUTPUT_DIR / "c_project_analysis.json"),
+                       help="C项目分析结果文件（默认读取配置的输出目录）")
     
     # 配置参数
     parser.add_argument("--batch-size", type=int, default=1,
@@ -505,22 +522,33 @@ def main():
                        help="每个批次的最大字符数")
     
     # 输出文件
-    parser.add_argument("--output", default="output/file_batches.json",
-                       help="输出的批次规划文件")
+    parser.add_argument("--output", default=str(_DEFAULT_OUTPUT_DIR / "file_batches.json"),
+                       help="输出的批次规划文件（默认写入配置的输出目录）")
     
     args = parser.parse_args()
     
     # 确保输入文件存在
-    for file_path in [args.topo_order, args.analysis]:
-        if not os.path.exists(file_path):
-            print(f"错误: 文件不存在 {file_path}")
-            return 1
+    topo_path = Path(args.topo_order)
+    if not topo_path.is_absolute():
+        topo_path = (_DEFAULT_OUTPUT_DIR / topo_path).resolve()
+
+    analysis_path = Path(args.analysis)
+    if not analysis_path.is_absolute():
+        analysis_path = (_DEFAULT_OUTPUT_DIR / analysis_path).resolve()
+
+    if not topo_path.exists():
+        print(f"错误: 文件不存在 {topo_path}")
+        return 1
+
+    if not analysis_path.exists():
+        print(f"错误: 文件不存在 {analysis_path}")
+        return 1
     
     print("正在加载数据...")
     
     # 加载数据
-    files = load_file_analysis(args.analysis)
-    ordered_files, file_cycle_groups = load_file_topology(args.topo_order)
+    files = load_file_analysis(str(analysis_path))
+    ordered_files, file_cycle_groups = load_file_topology(str(topo_path))
     
     print(f"加载了 {len(files)} 个文件")
     print(f"文件拓扑顺序包含 {len(ordered_files)} 个文件")
@@ -554,12 +582,16 @@ def main():
     }
     
     # 保存结果
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-    with open(args.output, 'w', encoding='utf-8') as f:
+    output_path = Path(args.output)
+    if not output_path.is_absolute():
+        output_path = (_DEFAULT_OUTPUT_DIR / output_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open('w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     
     # 输出统计信息
-    print(f"\n✓ 文件批次规划完成: {args.output}")
+    print(f"\n✓ 文件批次规划完成: {output_path}")
     print(f"  总文件数: {len(files)}")
     print(f"  总批次数: {len(batches)}")
     print(f"  批次大小: {args.batch_size} 文件/批次")

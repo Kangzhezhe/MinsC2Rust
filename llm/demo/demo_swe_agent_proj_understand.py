@@ -84,6 +84,28 @@ def demonstrate_search(agent: SWEAgent, max_rounds: int = 5) -> None:
     print("\n代理回复:")
     print(response.get("tool_calls", []))
     print(response["final_response"])
+
+
+def demonstrate_symbol(agent: SWEAgent, max_rounds: int = 5) -> None:
+    task_description = textwrap.dedent(
+        f"""
+        帮我搜索项目中的符号 ArrayList 的定义和所有引用
+        """
+    ).strip()
+
+    response = agent.run_task(
+        task_description,
+        acceptance_criteria=[
+            "解释ArrayList 符号是什么",
+            "列出所有 ArrayList 的定义位置和引用位置",
+            "对于每个定义，搜索查看他在代码中的详细定义，包括每个字段",
+            "对于每个引用，搜索查看他的代码解释它是如何使用 ArrayList 的",
+        ],
+    )
+
+    print("\n代理回复:")
+    print(response.get("tool_calls", []))
+    print(response["final_response"])
        
 
 
@@ -96,14 +118,16 @@ def main() -> None:
         llm_instance=llm,
         max_iterations=20,
         command_timeout=90,
-        memory_strategy={"name": "tokenlimit", "max_tokens": 2000},
+        # memory_strategy={"name": "tokenlimit", "max_tokens": 2000},
+        memory_strategy={"name": "summary", "token_trigger_max_tokens": 4000},
     )
 
     print("SWEAgent 代码理解演示")
     print(f"工作目录: {workspace}")
 
     # demonstrate_search(agent)
-    demonstrate_compile(agent)
+    # demonstrate_compile(agent)
+    demonstrate_symbol(agent)
 
 
 if __name__ == "__main__":

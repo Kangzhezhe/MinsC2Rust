@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Iterable, Union
 
 import yaml
 
@@ -44,6 +44,31 @@ def get_project_root() -> Path:
     return root_path
 
 
+@lru_cache(maxsize=1)
+def get_output_dir() -> Path:
+    data = _load_config_dict()
+    output_value = data.get("output_root") or data.get("output_dir") or data.get("output_path")
+
+    if output_value:
+        expanded = os.path.expanduser(str(output_value))
+        expanded = os.path.expandvars(expanded)
+        output_path = Path(expanded)
+        if not output_path.is_absolute():
+            output_path = (CONFIG_PATH.parent / output_path).resolve()
+    else:
+        output_path = (_ANALYZER_DIR / "output").resolve()
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    return output_path
+
+
+def resolve_output_path(*path_parts: Union[str, Path]) -> Path:
+    output_dir = get_output_dir()
+    parts: Iterable[Union[str, Path]] = path_parts or ()
+    resolved = output_dir.joinpath(*(Path(part) for part in parts))
+    return resolved.resolve()
+
+
 def to_absolute_path(path_like: Union[str, Path]) -> Path:
     path_obj = Path(path_like)
     if path_obj.is_absolute():
@@ -79,6 +104,8 @@ __all__ = [
     "AnalyzerConfigError",
     "CONFIG_PATH",
     "get_project_root",
+    "get_output_dir",
     "to_absolute_path",
     "to_relative_path",
+    "resolve_output_path",
 ]

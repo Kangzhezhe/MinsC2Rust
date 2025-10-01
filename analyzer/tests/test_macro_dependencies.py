@@ -11,11 +11,18 @@ sys.path.insert(0, parent_dir)
 
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType, DependencyType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
+ANALYSIS_JSON = str(get_output_dir() / "c_project_analysis.json")
+
 def test_macro_dependencies():
     """测试宏依赖关系识别"""
     print("=== 测试宏依赖关系识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 测试宏定义和宏使用的识别
@@ -71,7 +78,7 @@ def test_conditional_compilation():
     """测试条件编译相关的宏识别"""
     print("\n=== 测试条件编译宏识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     conditional_macros = [
@@ -106,7 +113,7 @@ def test_macro_usage_in_functions():
     """测试函数中宏的使用识别"""
     print("\n=== 测试函数中宏的使用识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 找到一些使用宏的函数

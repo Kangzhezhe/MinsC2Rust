@@ -11,9 +11,16 @@ sys.path.insert(0, parent_dir)
 
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
+ANALYSIS_JSON = str(get_output_dir() / "c_project_analysis.json")
+
 def test_specific_symbols():
     """测试特定符号是否在注册表中"""
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 测试你提到的符号

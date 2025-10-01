@@ -11,11 +11,18 @@ sys.path.insert(0, parent_dir)
 
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType, DependencyType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
+ANALYSIS_JSON = str(get_output_dir() / "c_project_analysis.json")
+
 def test_struct_dependencies():
     """测试结构体依赖关系识别"""
     print("=== 测试结构体依赖关系识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 获取所有结构体
@@ -67,7 +74,7 @@ def test_typedef_dependencies():
     """测试类型定义依赖关系识别"""
     print("\n=== 测试类型定义依赖关系识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 获取所有类型定义
@@ -108,7 +115,7 @@ def test_type_usage_in_functions():
     """测试函数中类型的使用"""
     print("\n=== 测试函数中类型的使用 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 找一些可能使用自定义类型的函数
@@ -152,7 +159,7 @@ def test_enum_dependencies():
     """测试枚举依赖关系识别"""
     print("\n=== 测试枚举依赖关系识别 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 获取所有枚举

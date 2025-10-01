@@ -14,6 +14,15 @@ from enum import Enum
 import re
 from pathlib import Path
 
+try:  # 兼容脚本直接执行与包内导入
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from .config import get_output_dir
+
+_DEFAULT_OUTPUT_DIR = get_output_dir()
+_DEFAULT_ANALYSIS_PATH = _DEFAULT_OUTPUT_DIR / "c_project_analysis.json"
+_DEFAULT_DEPENDENCIES_PATH = _DEFAULT_OUTPUT_DIR / "symbol_dependencies.json"
+
 class SymbolType(Enum):
     """符号类型枚举"""
     FUNCTION = "functions"
@@ -881,21 +890,50 @@ class SymbolDependencyAnalyzer:
         
         return stats
 
-def main():
+def main() -> int:
     """主函数 - 演示完整功能"""
+    import argparse
     import time
+
+    parser = argparse.ArgumentParser(description="符号依赖关系分析器")
+    parser.add_argument(
+        "--analysis",
+        default=str(_DEFAULT_ANALYSIS_PATH),
+        help="C 项目分析结果 JSON 路径（默认读取配置的输出目录）",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(_DEFAULT_DEPENDENCIES_PATH),
+        help="符号依赖结果输出路径（默认写入配置的输出目录）",
+    )
+
+    args = parser.parse_args()
+
+    analysis_path = Path(args.analysis)
+    if not analysis_path.is_absolute():
+        analysis_path = (_DEFAULT_OUTPUT_DIR / analysis_path).resolve()
+
+    if not analysis_path.exists():
+        print(f"❌ 分析结果文件不存在: {analysis_path}")
+        return 1
+
+    output_path = Path(args.output)
+    if not output_path.is_absolute():
+        output_path = (_DEFAULT_OUTPUT_DIR / output_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     start_time = time.time()
-    
-    analyzer = SymbolDependencyAnalyzer('output/c_project_analysis.json')
-    
+
+    analyzer = SymbolDependencyAnalyzer(str(analysis_path))
+
     print("=== 符号依赖关系分析器 ===")
     print("第二阶段：完整的依赖关系分析")
     print()
-    
+
     # 构建符号注册表
     print("1️⃣ 构建符号注册表...")
     analyzer.build_symbol_registry()
-    
+
     # 分析依赖关系
     print("\n2️⃣ 分析符号依赖关系...")
     analyzer.analyze_all_dependencies()
@@ -904,14 +942,18 @@ def main():
     print("\n3️⃣ 生成分析报告...")
     report = analyzer.generate_dependency_report()
     print(report)
-    
+
     # 导出结果
     print("\n4️⃣ 导出分析结果...")
-    analyzer.export_dependencies_to_json('output/symbol_dependencies.json')
-    
+    analyzer.export_dependencies_to_json(str(output_path))
+
     # 性能统计
     end_time = time.time()
     print(f"\n⏱️ 总用时: {end_time - start_time:.2f} 秒")
+    print(f"📁 结果写入: {output_path}")
+
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

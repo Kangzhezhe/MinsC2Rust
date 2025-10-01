@@ -13,13 +13,18 @@ sys.path.insert(0, parent_dir)
 
 from dependency_visualizer import DependencyVisualizer
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
 def demo_visualization():
     """演示可视化功能"""
     print("🎨 符号依赖关系可视化演示")
     print("=" * 50)
     
     # 检查依赖文件
-    deps_file = "output/symbol_dependencies.json"
+    deps_file = str(get_output_dir() / "symbol_dependencies.json")
     if not os.path.exists(deps_file):
         print("❌ 请先运行 symbol_dependency_analyzer.py 生成依赖数据")
         return
@@ -92,7 +97,7 @@ def demo_visualization():
     
     # 5. 输出文件统计
     print("\n5️⃣ 输出文件统计:")
-    output_dir = "output"
+    output_dir = get_output_dir()
     if os.path.exists(output_dir):
         files = [f for f in os.listdir(output_dir) if f.endswith('.png')]
         total_size = sum(os.path.getsize(os.path.join(output_dir, f)) for f in files)

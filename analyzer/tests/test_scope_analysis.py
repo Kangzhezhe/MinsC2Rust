@@ -11,11 +11,18 @@ sys.path.insert(0, parent_dir)
 
 from symbol_dependency_analyzer import SymbolDependencyAnalyzer, SymbolType, DependencyType
 
+try:
+    from config import get_output_dir
+except ImportError:  # pragma: no cover
+    from analyzer.config import get_output_dir
+
+ANALYSIS_JSON = str(get_output_dir() / "c_project_analysis.json")
+
 def test_local_variable_filtering():
     """测试局部变量过滤功能"""
     print("=== 测试局部变量过滤功能 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 选择一些有局部变量的函数进行测试
@@ -79,7 +86,7 @@ def test_parameter_filtering():
     """测试函数参数过滤"""
     print("\n=== 测试函数参数过滤 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 选择有明显参数的函数
@@ -137,7 +144,7 @@ def test_scope_analysis():
     """测试作用域分析的准确性"""
     print("\n=== 测试作用域分析准确性 ===")
     
-    analyzer = SymbolDependencyAnalyzer('../output/c_project_analysis.json')
+    analyzer = SymbolDependencyAnalyzer(ANALYSIS_JSON)
     analyzer.build_symbol_registry()
     
     # 创建一个测试代码片段

@@ -237,8 +237,10 @@ class SummaryStrategy(BaseMemoryStrategy):
         summarizer: Callable[[str], str],
         *,
         keep_recent: int = 4,
-        summary_max_tokens: int = 500,
+        summary_max_tokens: int = 1000,
         checkpoint_interval: int = 10,
+        token_trigger_max_tokens: Optional[int] = None,
+        token_counter: Optional[Callable[[Mapping[str, Any]], int]] = None,
         verbose: bool = False,
     ) -> None:
         if keep_recent < 0:
@@ -247,15 +249,40 @@ class SummaryStrategy(BaseMemoryStrategy):
             raise ValueError("checkpoint_interval 必须为正整数")
         if summary_max_tokens <= 0:
             raise ValueError("summary_max_tokens 必须为正整数")
+        if token_trigger_max_tokens is not None and token_trigger_max_tokens <= 0:
+            raise ValueError("token_trigger_max_tokens 必须为正整数")
         super().__init__(verbose=verbose)
         self.summarizer = summarizer
         self.keep_recent = keep_recent
         self.summary_max_tokens = summary_max_tokens
         self.checkpoint_interval = checkpoint_interval
+        self.token_trigger_max_tokens = token_trigger_max_tokens
+        self._token_counter = token_counter
+        self._encoding = None
+        if (
+            self._token_counter is None
+            and self.token_trigger_max_tokens is not None
+            and tiktoken is not None
+        ):
+            try:
+                self._encoding = tiktoken.get_encoding("cl100k_base")
+            except Exception:  # pragma: no cover - defensive fallback
+                self._encoding = None
         self._checkpoints: Dict[int, _Checkpoint] = {}
 
     def reset(self) -> None:
         self._checkpoints.clear()
+
+    def _count_tokens(self, message: Mapping[str, Any]) -> int:
+        if self._token_counter is not None:
+            try:
+                return max(1, int(self._token_counter(message)))
+            except Exception:
+                return 1
+        if self._encoding is not None:  # pragma: no cover - requires tiktoken
+            text = str(message.get("content", ""))
+            return max(1, len(self._encoding.encode(text)))
+        return _default_token_estimator(message)
 
     def _format_messages(self, messages: Sequence[Message], start_index: int = 1) -> str:
         lines = []
@@ -324,15 +351,32 @@ class SummaryStrategy(BaseMemoryStrategy):
         last_checkpoint = self._checkpoints[checkpoint_counts[-1]] if checkpoint_counts else None
         last_count = last_checkpoint.message_count if last_checkpoint else 0
 
+        tokens_exceeded = False
+        if self.token_trigger_max_tokens is not None:
+            total_tokens = sum(self._count_tokens(m) for m in to_summarise)
+            tokens_exceeded = total_tokens >= self.token_trigger_max_tokens
+            if tokens_exceeded:
+                self._debug(
+                    "🧠 [摘要策略] 触发 token 阈值: {} / {}".format(
+                        total_tokens, self.token_trigger_max_tokens
+                    )
+                )
+
         need_new_checkpoint = (
             current_count >= self.checkpoint_interval
-            and (last_checkpoint is None or current_count - last_count >= self.checkpoint_interval)
+            and (
+                last_checkpoint is None
+                or current_count - last_count >= self.checkpoint_interval
+            )
         )
 
-        if need_new_checkpoint or last_checkpoint is None:
+        if need_new_checkpoint or tokens_exceeded or last_checkpoint is None:
+            start_index = (
+                last_checkpoint.message_count + 1 if last_checkpoint is not None else 1
+            )
             checkpoint = self._build_summary(
                 to_summarise,
-                start_index=1,
+                start_index=start_index,
                 end_index=current_count,
                 previous_summary=last_checkpoint,
             )
@@ -427,6 +471,8 @@ def create_memory_strategy(
         summarizer_fn = params.pop("summarizer", summarizer)
         if summarizer_fn is None:
             raise ValueError("SummaryStrategy 需要提供 summarizer 函数")
+        if "token_counter" not in params and token_counter is not None:
+            params.setdefault("token_counter", token_counter)
         return SummaryStrategy(summarizer=summarizer_fn, **params)
 
     raise ValueError(f"未知的 memory strategy: {name}")

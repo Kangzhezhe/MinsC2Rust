@@ -11,9 +11,9 @@ from pathlib import Path
 from datetime import datetime
 
 try:  # 兼容脚本直接执行与包内导入
-    from config import get_project_root, to_absolute_path
+    from config import get_project_root, get_output_dir, to_absolute_path
 except ImportError:  # pragma: no cover
-    from .config import get_project_root, to_absolute_path
+    from .config import get_project_root, get_output_dir, to_absolute_path
 
 _ANALYZER_DIR = Path(__file__).resolve().parent
 
@@ -427,7 +427,7 @@ class CProjectReconstructor:
 def main():
     """主函数"""
 
-    json_file = _ANALYZER_DIR / "output" / "c_project_analysis.json"
+    json_file = get_output_dir() / "c_project_analysis.json"
     source_project = get_project_root()
     target_directory = _ANALYZER_DIR.parent / "temp" / "reconstructed_c_project"
 

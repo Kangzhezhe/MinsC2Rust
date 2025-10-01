@@ -12,9 +12,9 @@ import json
 import sys
 
 try:  # 兼容脚本直接执行与模块导入
-    from config import get_project_root, to_relative_path
+    from config import get_project_root, get_output_dir, to_relative_path
 except ImportError:  # pragma: no cover
-    from .config import get_project_root, to_relative_path
+    from .config import get_project_root, get_output_dir, to_relative_path
 
 class CProjectAnalyzer:
     def __init__(self):
@@ -1015,8 +1015,8 @@ def main():
     parser = argparse.ArgumentParser(description='C项目分析器')
     parser.add_argument('project_path', nargs='?', default=None,
                         help='要分析的C项目路径（默认读取配置文件）')
-    parser.add_argument('-o', '--output', default="output/c_project_analysis.json",
-                       help='输出JSON文件路径')
+    parser.add_argument('-o', '--output', default=str(get_output_dir() / "c_project_analysis.json"),
+                       help='输出JSON文件路径（默认写入配置的输出目录）')
     parser.add_argument('--debug', action='store_true',
                        help='启用调试模式')
     
@@ -1039,7 +1039,7 @@ def main():
 
     output_path = Path(args.output)
     if not output_path.is_absolute():
-        output_path = Path(__file__).resolve().parent / output_path
+        output_path = (get_output_dir() / output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     analyzer.save_results(str(output_path))
 
