@@ -9,6 +9,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
@@ -365,7 +366,7 @@ class SWEFileSystemTools:
     ) -> Dict[str, Any]:
         """在工作区内执行快速文本搜索。
 
-        使用示例::
+        使用示例:
 
             # 精确查找 README 中的 "TODO"
             toolset.grep_search("TODO", includePattern="README.md")
@@ -1023,6 +1024,9 @@ class _LspSession:
     language: str
     language_id: LanguageIdentifier
     opened_documents: Dict[Path, int] = field(default_factory=dict)
+    diagnostics: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    diagnostic_events: Dict[str, threading.Event] = field(default_factory=dict)
+    diagnostics_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def is_alive(self) -> bool:
         return self.process.poll() is None
@@ -1063,6 +1067,25 @@ class SWELspTools:
         "workspace": {
             "symbol": {"dynamicRegistration": False},
         },
+    }
+
+    DIAGNOSTIC_SEVERITY_MAP: Dict[int, str] = {
+        1: "Error",
+        2: "Warning",
+        3: "Information",
+        4: "Hint",
+    }
+    SEVERITY_VALUE_BY_NAME: Dict[str, int] = {name.lower(): value for value, name in DIAGNOSTIC_SEVERITY_MAP.items()}
+    SEVERITY_ALIAS_MAP: Dict[str, int] = {
+        "err": 1,
+        "errors": 1,
+        "warn": 2,
+        "warnings": 2,
+        "info": 3,
+        "infos": 3,
+        "informational": 3,
+        "hint": 4,
+        "hints": 4,
     }
 
     EXTENSION_LANGUAGE_MAP: Dict[str, str] = {
@@ -1165,20 +1188,8 @@ class SWELspTools:
             self._sessions.clear()
 
         for session in sessions:
-            try:
-                if session.client is not None:
-                    with suppress(Exception):
-                        session.client.shutdown()
-                    with suppress(Exception):
-                        session.client.exit()
-            finally:
-                if session.process.poll() is None:
-                    session.process.terminate()
-                    with suppress(Exception):
-                        session.process.wait(timeout=3)
-                    if session.process.poll() is None:
-                        with suppress(Exception):
-                            session.process.kill()
+            with suppress(Exception):
+                self._shutdown_session(session)
 
     # ------------------------------------------------------------------
     # 路径与缓存处理
@@ -1228,6 +1239,9 @@ class SWELspTools:
             return False
 
         return matcher, normalized
+
+    def _detect_language_for_path(self, path: Path) -> Optional[str]:
+        return self.EXTENSION_LANGUAGE_MAP.get(path.suffix.lower())
 
     def _iter_language_files(self, language: str) -> Iterable[Path]:
         patterns = self.LANGUAGE_FILE_PATTERNS.get(language.lower(), ())
@@ -1394,6 +1408,10 @@ class SWELspTools:
         if language not in self.language_servers:
             raise SWEAgentToolError(f"未配置语言服务器: {language}")
 
+        language_id = self.LANGUAGE_IDENTIFIERS.get(language)
+        if language_id is None:
+            raise SWEAgentToolError(f"暂不支持该语言: {language}")
+
         with self._sessions_lock:
             session = self._sessions.get(language)
             if session and session.is_alive():
@@ -1442,9 +1460,20 @@ class SWELspTools:
                 endpoint = pylspclient.LspEndpoint(
                     json_rpc,
                     timeout=self.command_timeout,
-                    notify_callbacks={"textDocument/publishDiagnostics": self._handle_publish_diagnostics},
+                    notify_callbacks={},
                 )
                 client = pylspclient.LspClient(endpoint)
+
+                session_candidate = _LspSession(
+                    process=process,
+                    client=client,
+                    endpoint=endpoint,
+                    language=language,
+                    language_id=language_id,
+                )
+                endpoint.notify_callbacks["textDocument/publishDiagnostics"] = (
+                    lambda params, session=session_candidate: self._handle_publish_diagnostics(session, params)
+                )
 
                 capabilities = self.language_capabilities.get(language) or self.DEFAULT_CLIENT_CAPABILITIES
                 try:
@@ -1469,22 +1498,7 @@ class SWELspTools:
                         process.wait(timeout=3)
                     continue
 
-                language_id = self.LANGUAGE_IDENTIFIERS.get(language)
-                if language_id is None:
-                    with suppress(Exception):
-                        endpoint.stop()
-                    process.terminate()
-                    with suppress(Exception):
-                        process.wait(timeout=3)
-                    raise SWEAgentToolError(f"暂不支持该语言: {language}")
-
-                session = _LspSession(
-                    process=process,
-                    client=client,
-                    endpoint=endpoint,
-                    language=language,
-                    language_id=language_id,
-                )
+                session = session_candidate
                 self._sessions[language] = session
                 return session
 
@@ -1493,6 +1507,11 @@ class SWELspTools:
             raise SWEAgentToolError(f"未能启动语言 {language} 的语言服务器")
 
     def _shutdown_session(self, session: _LspSession) -> None:
+        with suppress(Exception):
+            session.endpoint.stop()
+        if session.endpoint.is_alive():
+            with suppress(Exception):
+                session.endpoint.join(timeout=1)
         with suppress(Exception):
             session.client.shutdown()
         with suppress(Exception):
@@ -1505,9 +1524,23 @@ class SWELspTools:
                 with suppress(Exception):
                     session.process.kill()
 
-    @staticmethod
-    def _handle_publish_diagnostics(params: Optional[dict]) -> None:  # noqa: D401
-        """忽略诊断信息回调。"""
+    def _handle_publish_diagnostics(self, session: _LspSession, params: Optional[dict]) -> None:
+        if not params:
+            return
+
+        uri = params.get("uri") or params.get("textDocument", {}).get("uri")
+        if not uri:
+            return
+
+        diagnostics_payload = params.get("diagnostics") or []
+
+        with session.diagnostics_lock:
+            session.diagnostics[uri] = diagnostics_payload
+            event = session.diagnostic_events.get(uri)
+            if event is None:
+                event = threading.Event()
+                session.diagnostic_events[uri] = event
+            event.set()
 
     def _ensure_compile_commands(self) -> Optional[Path]:
         compile_commands = self.workspace_root / "compile_commands.json"
@@ -1536,8 +1569,16 @@ class SWELspTools:
     # ------------------------------------------------------------------
     def _ensure_document_open(self, session: _LspSession, path: Path, *, uri: Optional[str] = None) -> str:
         text = self._get_document_text(path)
+        document_uri = uri or path.as_uri()
         if path not in session.opened_documents:
-            document_uri = uri or path.as_uri()
+            with session.diagnostics_lock:
+                session.diagnostics.pop(document_uri, None)
+                event = session.diagnostic_events.get(document_uri)
+                if event is None:
+                    session.diagnostic_events[document_uri] = threading.Event()
+                else:
+                    event.clear()
+
             session.client.didOpen(
                 TextDocumentItem(
                     uri=document_uri,
@@ -1548,6 +1589,59 @@ class SWELspTools:
             )
             session.opened_documents[path] = 1
         return text
+
+    def _wait_for_diagnostics(
+        self,
+        session: _LspSession,
+        uri: str,
+        *,
+        timeout: float = 2.0,
+    ) -> List[Dict[str, Any]]:
+        deadline = time.monotonic() + timeout
+
+        with session.diagnostics_lock:
+            event = session.diagnostic_events.get(uri)
+            if event is None:
+                event = threading.Event()
+                session.diagnostic_events[uri] = event
+            else:
+                event.clear()
+
+            diagnostics = session.diagnostics.get(uri)
+            if diagnostics is not None:
+                return diagnostics
+
+        remaining = max(deadline - time.monotonic(), 0.0)
+        if remaining > 0:
+            event.wait(timeout=remaining)
+
+        with session.diagnostics_lock:
+            return session.diagnostics.get(uri, [])
+
+    def _normalize_min_severity(self, min_severity: Optional[Any]) -> Optional[int]:
+        if min_severity is None:
+            return None
+
+        value: Optional[int]
+        if isinstance(min_severity, int):
+            value = min_severity
+        else:
+            normalized = str(min_severity).strip().lower()
+            if not normalized:
+                return None
+            if normalized.isdigit():
+                value = int(normalized)
+            else:
+                value = self.SEVERITY_VALUE_BY_NAME.get(normalized)
+                if value is None:
+                    value = self.SEVERITY_ALIAS_MAP.get(normalized)
+
+        if value in self.DIAGNOSTIC_SEVERITY_MAP:
+            return value
+
+        raise SWEAgentToolError(
+            "min_severity 无效，支持: error, warning, information, hint 或 1-4"
+        )
 
     # ------------------------------------------------------------------
     # 符号查询
@@ -1911,6 +2005,117 @@ class SWELspTools:
             result["warnings"] = combined_errors
         return result
 
+    def lsp_get_errors(
+        self,
+        filePaths: List[str],
+        min_severity: Optional[Union[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """
+        获取指定文件的诊断信息。min_severity 可选，指定返回的最小诊断级别。支持: error, warning, information, hint 或 1-4"
+        """
+        if not filePaths:
+            raise SWEAgentToolError("filePaths 不能为空")
+
+        severity_threshold = self._normalize_min_severity(min_severity)
+        severity_label = (
+            self.DIAGNOSTIC_SEVERITY_MAP.get(severity_threshold)
+            if severity_threshold is not None
+            else None
+        )
+
+        results: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        seen: Set[str] = set()
+
+        for raw_path in filePaths:
+            try:
+                resolved = self._resolve_path(raw_path)
+            except SWEAgentToolError as exc:
+                warnings.append(str(exc))
+                continue
+
+            if resolved.is_dir():
+                warnings.append(f"{self._relative_to_root(resolved)}: 当前仅支持文件路径")
+                continue
+
+            rel_path = self._relative_to_root(resolved)
+            if rel_path in seen:
+                continue
+            seen.add(rel_path)
+
+            language = self._detect_language_for_path(resolved)
+            if not language:
+                warnings.append(f"{rel_path}: 暂不支持的文件类型")
+                continue
+
+            try:
+                session = self._ensure_session(language)
+            except SWEAgentToolError as exc:
+                warnings.append(f"{rel_path}: {exc}")
+                continue
+
+            uri = resolved.as_uri()
+            try:
+                self._ensure_document_open(session, resolved, uri=uri)
+            except SWEAgentToolError as exc:
+                warnings.append(f"{rel_path}: {exc}")
+                continue
+
+            diagnostics = self._wait_for_diagnostics(
+                session,
+                uri,
+                timeout=max(float(self.command_timeout), 2.0),
+            )
+
+            entries: List[Dict[str, Any]] = []
+            for diag in diagnostics:
+                diag_range = diag.get("range") or {}
+                start = diag_range.get("start") or {}
+                end = diag_range.get("end") or {}
+                severity_val = diag.get("severity")
+                if (
+                    severity_threshold is not None
+                    and severity_val is not None
+                    and severity_val > severity_threshold
+                ):
+                    continue
+                severity_name = self.DIAGNOSTIC_SEVERITY_MAP.get(severity_val)
+
+                entries.append(
+                    {
+                        "message": diag.get("message", ""),
+                        "severity": severity_name or severity_val,
+                        "severity_value": severity_val,
+                        "source": diag.get("source"),
+                        "code": diag.get("code"),
+                        "start_line": (start.get("line") or 0) + 1,
+                        "start_character": (start.get("character") or 0) + 1,
+                        "end_line": (end.get("line") or 0) + 1,
+                        "end_character": (end.get("character") or 0) + 1,
+                    }
+                )
+
+            results.append(
+                {
+                    "file": rel_path,
+                    "language": language,
+                    "diagnostics": entries,
+                }
+            )
+
+        response: Dict[str, Any] = {
+            "tool": "lsp_get_errors",
+            "files": results,
+        }
+        if severity_threshold is not None:
+            response["min_severity"] = {
+                "value": severity_threshold,
+                "label": severity_label,
+            }
+        if warnings:
+            response["warnings"] = warnings
+        return response
+
 
 class SWEAgent(Agent):
     """在现有Agent框架基础上提供SWE-agent风格能力。"""
@@ -1999,6 +2204,7 @@ class SWEAgent(Agent):
                 [
                     self.lsp_toolset.lsp_list_symbol_definitions,
                     self.lsp_toolset.lsp_list_symbol_usages,
+                    self.lsp_toolset.lsp_get_errors,
                 ]
             )
         return tools

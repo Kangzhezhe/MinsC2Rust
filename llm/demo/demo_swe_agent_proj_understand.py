@@ -108,6 +108,24 @@ def demonstrate_symbol(agent: SWEAgent, max_rounds: int = 5) -> None:
     print(response.get("tool_calls", []))
     print(response["final_response"])
 
+def demonstrate_errors(agent: SWEAgent, max_rounds: int = 5) -> None:
+    task_description = textwrap.dedent(
+        f"""
+        帮我诊断一下所有的c语言代码编译错误
+        """
+    ).strip()
+
+    response = agent.run_task(
+        task_description,
+        acceptance_criteria=[
+            "列出所有编译错误",
+        ],
+    )
+
+    print("\n代理回复:")
+    print(response.get("tool_calls", []))
+    print(response["final_response"])
+
 def demonstrate_symbol_rust(agent: SWEAgent, max_rounds: int = 5) -> None:
     task_description = textwrap.dedent(
         f"""
@@ -149,8 +167,9 @@ def main() -> None:
 
     # demonstrate_search(agent)
     # demonstrate_compile(agent)
-    demonstrate_symbol(agent)
+    # demonstrate_symbol(agent)
     # demonstrate_symbol_rust(agent)
+    demonstrate_errors(agent)
 
     agent.close()
 
