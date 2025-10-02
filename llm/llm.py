@@ -219,7 +219,7 @@ class LLM:
         system_parts = ["你是一个智能助手，请根据用户要求提供准确、有用的回答。"]
         
         if parser:
-            system_parts.append(f"输出格式要求：{parser.get_format_instructions()}")
+            system_parts.append(f"最终输出格式要求：{parser.get_format_instructions()}")
         
         if caller:
             system_parts.append(f"工具使用说明：{caller.get_instructions()}")

@@ -48,7 +48,8 @@ def read_file(file_path):
     elif file_path.endswith('.txt'):
         return read_txt(file_path)
     else:
-        raise ValueError("不支持的文件格式")
+        return read_txt(file_path)
+        # raise ValueError("不支持的文件格式")
 
 def split_by_markdown_heading(document_content):
     """

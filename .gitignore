@@ -13,3 +13,4 @@ temp/
 rag_chroma_db/
 .pytest_cache/
 pylspclient/
+code_qa/

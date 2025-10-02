@@ -6,7 +6,7 @@
 import os
 import glob
 import tree_sitter_c as ts_c
-from tree_sitter import Language, Parser
+from tree_sitter import Language, Parser, Query, QueryCursor
 from pathlib import Path
 import json
 import sys
@@ -23,6 +23,63 @@ class CProjectAnalyzer:
         self.parser = Parser(self.C_LANGUAGE)
         self.analysis_results = {}
         self.project_root = get_project_root()
+        self._queries = self._initialize_queries()
+
+    def _initialize_queries(self):
+        """预编译Tree-sitter查询模式"""
+        return {
+            'function_definitions': Query(self.C_LANGUAGE, """
+                (function_definition) @function_definition
+            """),
+            'function_declarations': Query(self.C_LANGUAGE, """
+                (
+                    declaration
+                        declarator: (function_declarator)
+                ) @function_declaration
+
+                (
+                    declaration
+                        declarator: (pointer_declarator
+                            declarator: (function_declarator)
+                        )
+                ) @function_declaration
+            """),
+            'structs': Query(self.C_LANGUAGE, """
+                (struct_specifier) @struct_specifier
+            """),
+            'includes': Query(self.C_LANGUAGE, """
+                (preproc_include) @include
+            """),
+            'top_level_declarations': Query(self.C_LANGUAGE, """
+                (declaration) @declaration
+            """),
+            'typedefs': Query(self.C_LANGUAGE, """
+                (type_definition) @typedef
+            """),
+            'macros': Query(self.C_LANGUAGE, """
+                (preproc_def) @macro
+                (preproc_function_def) @macro
+                (preproc_call) @macro
+            """),
+            'enums': Query(self.C_LANGUAGE, """
+                (enum_specifier) @enum
+            """),
+        }
+
+    def _run_query(self, name, root_node):
+        """执行查询并返回去重后的节点及捕获名称"""
+        seen = set()
+        query = self._queries[name]
+        cursor = QueryCursor(query)
+        captures = cursor.captures(root_node)
+
+        for capture, nodes in captures.items():
+            for node in nodes:
+                key = (capture, node.start_byte, node.end_byte)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield node, capture
     
     def find_c_files(self, project_path):
         """查找项目中所有的C和H文件"""
@@ -149,44 +206,30 @@ class CProjectAnalyzer:
     def extract_functions(self, node, content, root_node):
         """提取函数定义和声明"""
         functions = []
-        
-        def traverse(node):
-            if node.type == 'function_definition':
-                func_info = self.parse_function(node, content, root_node)
-                if func_info:
+        seen_ranges = set()
+
+        for func_node, _ in self._run_query('function_definitions', root_node):
+            func_info = self.parse_function(func_node, content, root_node)
+            if func_info:
+                key = (func_info['start_byte'], func_info['end_byte'])
+                if key not in seen_ranges:
+                    seen_ranges.add(key)
                     functions.append(func_info)
-            elif node.type == 'declaration':
-                # 检查是否是函数声明（包括指针返回类型）
-                has_function_declarator = False
-                for child in node.children:
-                    if child.type == 'function_declarator':
-                        has_function_declarator = True
-                        break
-                    elif child.type == 'pointer_declarator':
-                        # 检查指针声明中是否包含函数声明
-                        def check_pointer_declarator(ptr_node):
-                            for subchild in ptr_node.children:
-                                if subchild.type == 'function_declarator':
-                                    return True
-                                elif subchild.type == 'pointer_declarator':
-                                    if check_pointer_declarator(subchild):
-                                        return True
-                            return False
-                        if check_pointer_declarator(child):
-                            has_function_declarator = True
-                            break
-                
-                if has_function_declarator:
-                    func_info = self.parse_function_declaration(node, content, root_node)
-                    if func_info:
-                        functions.append(func_info)
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
+
+        for decl_node, _ in self._run_query('function_declarations', root_node):
+            target_node = decl_node if decl_node.type == 'declaration' else decl_node.parent
+            if not target_node or target_node.type != 'declaration':
+                continue
+            func_info = self.parse_function_declaration(target_node, content, root_node)
+            if func_info:
+                key = (func_info['start_byte'], func_info['end_byte'])
+                if key not in seen_ranges:
+                    seen_ranges.add(key)
+                    functions.append(func_info)
+
+        functions.sort(key=lambda item: item['start_byte'])
         return functions
-    
+
     def correct_byte_offset(self, node, content, original_func_name=None):
         """修正Tree-sitter的字节偏移错误"""
         try:
@@ -484,42 +527,33 @@ class CProjectAnalyzer:
     def extract_structs(self, node, content, root_node):
         """提取结构体定义"""
         structs = []
-        
-        def traverse(node):
-            if node.type == 'struct_specifier':
-                struct_name = None
-                for child in node.children:
-                    if child.type == 'type_identifier':
-                        struct_name = content[child.start_byte:child.end_byte]
-                        break
-                
-                if struct_name:
-                    # 提取完整的结构体定义
-                    full_definition = content[node.start_byte:node.end_byte]
-                    
-                    # 提取结构体字段
-                    fields = self.extract_struct_fields(node, content)
-                    
-                    # 提取前置注释
-                    comment = self.extract_preceding_comment(node, root_node, content)
-                    
-                    struct_info = {
-                        'name': struct_name,
-                        'start_line': node.start_point[0] + 1,
-                        'end_line': node.end_point[0] + 1,
-                        'start_byte': node.start_byte,
-                        'end_byte': node.end_byte,
-                        'full_definition': full_definition,
-                        'fields': fields,
-                        'comment': comment if comment else ''
-                    }
-                        
-                    structs.append(struct_info)
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
+
+        for struct_node, _ in self._run_query('structs', root_node):
+            struct_name = None
+            for child in struct_node.children:
+                if child.type == 'type_identifier':
+                    struct_name = content[child.start_byte:child.end_byte]
+                    break
+
+            if struct_name:
+                full_definition = content[struct_node.start_byte:struct_node.end_byte]
+                fields = self.extract_struct_fields(struct_node, content)
+                comment = self.extract_preceding_comment(struct_node, root_node, content)
+
+                struct_info = {
+                    'name': struct_name,
+                    'start_line': struct_node.start_point[0] + 1,
+                    'end_line': struct_node.end_point[0] + 1,
+                    'start_byte': struct_node.start_byte,
+                    'end_byte': struct_node.end_byte,
+                    'full_definition': full_definition,
+                    'fields': fields,
+                    'comment': comment if comment else ''
+                }
+
+                structs.append(struct_info)
+
+        structs.sort(key=lambda item: item['start_byte'])
         return structs
     
     def extract_struct_fields(self, struct_node, content):
@@ -548,23 +582,19 @@ class CProjectAnalyzer:
     def extract_includes(self, node, content):
         """提取预处理包含指令"""
         includes = []
-        
-        def traverse(node):
-            if node.type == 'preproc_include':
-                include_text = content[node.start_byte:node.end_byte].strip()
-                includes.append({
-                    'text': include_text,
-                    'line': node.start_point[0] + 1,
-                    'start_line': node.start_point[0] + 1,
-                    'end_line': node.end_point[0] + 1,
-                    'start_byte': node.start_byte,
-                    'end_byte': node.end_byte
-                })
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
+
+        for include_node, _ in self._run_query('includes', node):
+            include_text = content[include_node.start_byte:include_node.end_byte].strip()
+            includes.append({
+                'text': include_text,
+                'line': include_node.start_point[0] + 1,
+                'start_line': include_node.start_point[0] + 1,
+                'end_line': include_node.end_point[0] + 1,
+                'start_byte': include_node.start_byte,
+                'end_byte': include_node.end_byte
+            })
+
+        includes.sort(key=lambda item: item['start_byte'])
         return includes
     
     def extract_global_variables(self, node, content, root_node):
@@ -597,68 +627,53 @@ class CProjectAnalyzer:
             
             return False
         
-        def traverse(node):
-            if (node.type == 'declaration' and 
-                node.parent and node.parent.type == 'translation_unit'):
-                # 这是一个顶级声明
-                var_text = content[node.start_byte:node.end_byte].strip()
-                if (var_text and 
-                    not var_text.startswith('typedef') and
-                    not is_function_declaration(var_text)):
-                    
-                    # 提取前置注释
-                    comment = self.extract_preceding_comment(node, root_node, content)
-                    
-                    var_info = {
-                        'text': var_text,
-                        'line': node.start_point[0] + 1,
-                        'start_line': node.start_point[0] + 1,
-                        'end_line': node.end_point[0] + 1,
-                        'start_byte': node.start_byte,
-                        'end_byte': node.end_byte,
-                        'comment': comment if comment else ''
-                    }
-                        
-                    variables.append(var_info)
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
+        for decl_node, _ in self._run_query('top_level_declarations', root_node):
+            if not decl_node.parent or decl_node.parent.type != 'translation_unit':
+                continue
+
+            var_text = content[decl_node.start_byte:decl_node.end_byte].strip()
+            if (var_text and
+                not var_text.startswith('typedef') and
+                not is_function_declaration(var_text)):
+
+                comment = self.extract_preceding_comment(decl_node, root_node, content)
+                variables.append({
+                    'text': var_text,
+                    'line': decl_node.start_point[0] + 1,
+                    'start_line': decl_node.start_point[0] + 1,
+                    'end_line': decl_node.end_point[0] + 1,
+                    'start_byte': decl_node.start_byte,
+                    'end_byte': decl_node.end_byte,
+                    'comment': comment if comment else ''
+                })
+
+        variables.sort(key=lambda item: item['start_byte'])
         return variables
     
     def extract_typedefs(self, node, content, root_node):
         """提取typedef定义"""
         typedefs = []
-        
-        def traverse(node):
-            if node.type == 'type_definition':
-                # 提取完整的typedef定义
-                typedef_text = content[node.start_byte:node.end_byte].strip()
-                if typedef_text:
-                    # 尝试提取typedef的名称
-                    typedef_name = self.extract_typedef_name(node, content)
-                    
-                    # 提取前置注释
-                    comment = self.extract_preceding_comment(node, root_node, content)
-                    
-                    typedef_info = {
-                        'text': typedef_text,
-                        'name': typedef_name if typedef_name else '',
-                        'line': node.start_point[0] + 1,
-                        'start_line': node.start_point[0] + 1,
-                        'end_line': node.end_point[0] + 1,
-                        'start_byte': node.start_byte,
-                        'end_byte': node.end_byte,
-                        'comment': comment if comment else ''
-                    }
-                        
-                    typedefs.append(typedef_info)
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
+
+        for typedef_node, _ in self._run_query('typedefs', root_node):
+            typedef_text = content[typedef_node.start_byte:typedef_node.end_byte].strip()
+            if not typedef_text:
+                continue
+
+            typedef_name = self.extract_typedef_name(typedef_node, content)
+            comment = self.extract_preceding_comment(typedef_node, root_node, content)
+
+            typedefs.append({
+                'text': typedef_text,
+                'name': typedef_name if typedef_name else '',
+                'line': typedef_node.start_point[0] + 1,
+                'start_line': typedef_node.start_point[0] + 1,
+                'end_line': typedef_node.end_point[0] + 1,
+                'start_byte': typedef_node.start_byte,
+                'end_byte': typedef_node.end_byte,
+                'comment': comment if comment else ''
+            })
+
+        typedefs.sort(key=lambda item: item['start_byte'])
         return typedefs
     
     def extract_typedef_name(self, typedef_node, content):
@@ -706,58 +721,27 @@ class CProjectAnalyzer:
     def extract_macros(self, node, content, root_node):
         """提取宏定义 (#define)"""
         macros = []
-        
-        def traverse(node):
-            if node.type == 'preproc_def':
-                # 提取完整的宏定义
-                macro_text = content[node.start_byte:node.end_byte].strip()
-                if macro_text:
-                    # 提取宏名称
-                    macro_name = self.extract_macro_name(node, content)
-                    
-                    # 提取前置注释
-                    comment = self.extract_preceding_comment(node, root_node, content)
-                    
-                    macro_info = {
-                        'text': macro_text,
-                        'name': macro_name if macro_name else '',
-                        'line': node.start_point[0] + 1,
-                        'start_line': node.start_point[0] + 1,
-                        'end_line': node.end_point[0] + 1,
-                        'start_byte': node.start_byte,
-                        'end_byte': node.end_byte,
-                        'comment': comment if comment else ''
-                    }
-                        
-                    macros.append(macro_info)
-            # 也检查其他可能的预处理器节点类型
-            elif node.type in ['preproc_function_def', 'preproc_call']:
-                macro_text = content[node.start_byte:node.end_byte].strip()
-                if macro_text.startswith('#define'):
-                    # 提取宏名称
-                    macro_name = self.extract_macro_name(node, content)
-                    
-                    # 提取前置注释
-                    comment = self.extract_preceding_comment(node, root_node, content)
-                    
-                    macro_info = {
-                        'text': macro_text,
-                        'name': macro_name if macro_name else '',
-                        'line': node.start_point[0] + 1,
-                        'start_line': node.start_point[0] + 1,
-                        'end_line': node.end_point[0] + 1,
-                        'start_byte': node.start_byte,
-                        'end_byte': node.end_byte,
-                        'comment': comment if comment else ''
-                    }
-                        
-                    macros.append(macro_info)
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
-        
+
+        for macro_node, _ in self._run_query('macros', root_node):
+            macro_text = content[macro_node.start_byte:macro_node.end_byte].strip()
+            if not macro_text or not macro_text.startswith('#define'):
+                continue
+
+            macro_name = self.extract_macro_name(macro_node, content)
+            comment = self.extract_preceding_comment(macro_node, root_node, content)
+
+            macros.append({
+                'text': macro_text,
+                'name': macro_name if macro_name else '',
+                'line': macro_node.start_point[0] + 1,
+                'start_line': macro_node.start_point[0] + 1,
+                'end_line': macro_node.end_point[0] + 1,
+                'start_byte': macro_node.start_byte,
+                'end_byte': macro_node.end_byte,
+                'comment': comment if comment else ''
+            })
+
+        macros.sort(key=lambda item: item['start_byte'])
         return macros
     
     def extract_macro_name(self, macro_node, content):
@@ -774,17 +758,13 @@ class CProjectAnalyzer:
     def extract_enums(self, node, content, root_node):
         """提取枚举定义"""
         enums = []
-        
-        def traverse(node):
-            if node.type == 'enum_specifier':
-                enum_info = self.parse_enum(node, content, root_node)
-                if enum_info:
-                    enums.append(enum_info)
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(node)
+
+        for enum_node, _ in self._run_query('enums', root_node):
+            enum_info = self.parse_enum(enum_node, content, root_node)
+            if enum_info:
+                enums.append(enum_info)
+
+        enums.sort(key=lambda item: item['start_byte'])
         return enums
     
     def parse_enum(self, node, content, root_node):

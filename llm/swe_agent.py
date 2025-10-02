@@ -1121,7 +1121,6 @@ class SWELspTools:
         command_timeout: int = 10,
     language_servers: Optional[Dict[str, Union[str, Sequence[str], Sequence[Sequence[str]]]]] = None,
         language_capabilities: Optional[Dict[str, Dict[str, Any]]] = None,
-        generate_compile_commands: bool = False,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         if not self.workspace_root.exists() or not self.workspace_root.is_dir():
@@ -1129,7 +1128,6 @@ class SWELspTools:
 
         self.encoding = encoding
         self.command_timeout = command_timeout
-        self.generate_compile_commands = generate_compile_commands
 
         self.language_servers = self._normalize_language_servers(language_servers)
         self.language_capabilities = language_capabilities or {}
@@ -1140,6 +1138,7 @@ class SWELspTools:
         self._document_text_cache: Dict[Path, str] = {}
         self._symbol_presence_cache: Dict[Tuple[str, str], bool] = {}
         self._language_sources_cache: Dict[str, bool] = {}
+        self._compile_commands_dir: Optional[Path] = None
 
         atexit.register(self.close)
 
@@ -1422,9 +1421,9 @@ class SWELspTools:
 
             candidates = self.language_servers[language]
 
-            if language == "c" and self.generate_compile_commands:
-                with suppress(Exception):
-                    self._ensure_compile_commands()
+            compile_commands_dir: Optional[Path] = None
+            if language == "c":
+                compile_commands_dir = self._get_compile_commands_dir()
 
             errors: List[str] = []
 
@@ -1432,6 +1431,9 @@ class SWELspTools:
                 command = list(candidate)
                 if not command:
                     continue
+
+                if language == "c" and compile_commands_dir is not None:
+                    self._ensure_compile_commands_flag(command, compile_commands_dir)
 
                 resolved_exec = shutil.which(command[0]) or command[0]
                 if shutil.which(resolved_exec) is None and not Path(resolved_exec).exists():
@@ -1563,6 +1565,49 @@ class SWELspTools:
 
         compile_commands.write_text(json.dumps(entries, indent=2))
         return compile_commands
+
+    def _get_compile_commands_dir(self) -> Path:
+        if self._compile_commands_dir and (self._compile_commands_dir / "compile_commands.json").is_file():
+            return self._compile_commands_dir
+
+        root_candidate = self.workspace_root / "compile_commands.json"
+        if root_candidate.is_file():
+            self._compile_commands_dir = root_candidate.parent
+            return self._compile_commands_dir
+
+        candidates = [candidate for candidate in self.workspace_root.rglob("compile_commands.json") if candidate.is_file()]
+        if not candidates:
+            raise SWEAgentToolError("未在工作区找到 compile_commands.json")
+
+        def candidate_key(path: Path) -> Tuple[int, str]:
+            try:
+                rel = path.relative_to(self.workspace_root)
+                depth = len(rel.parents)
+            except ValueError:
+                depth = len(path.parents)
+            return (depth, str(path))
+
+        target = min(candidates, key=candidate_key)
+        self._compile_commands_dir = target.parent
+        return self._compile_commands_dir
+
+    @staticmethod
+    def _ensure_compile_commands_flag(command: List[str], directory: Path) -> None:
+        flag = "--compile-commands-dir"
+        directory_str = str(directory)
+
+        for index, part in enumerate(command):
+            if part == flag:
+                if index + 1 < len(command):
+                    command[index + 1] = directory_str
+                else:
+                    command.append(directory_str)
+                return
+            if part.startswith(f"{flag}="):
+                command[index] = f"{flag}={directory_str}"
+                return
+
+        command.extend([flag, directory_str])
 
     # ------------------------------------------------------------------
     # 文档管理
