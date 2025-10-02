@@ -144,7 +144,7 @@ class Agent:
                 
                 # 构建当前轮次的提示词
                 if force_final_answer:
-                    tool_context = self._build_tool_context(result["tool_calls"])
+                    tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                     notice = final_answer_notice or "⚠️ 检测到你已连续多次重复调用相同工具，请基于已有信息直接提供最终答案，禁止再次调用工具。"
                     segments = [current_prompt]
                     if tool_context:
@@ -156,12 +156,12 @@ class Agent:
                     effective_prompt = current_prompt
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
                     # 连续工具调用过多，要求提供最终答案
-                    tool_context = self._build_tool_context(result["tool_calls"])
+                    tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                     effective_prompt = f"{current_prompt}\n\n{tool_context}\n\n你已经调了多个工具，请基于以上所有工具调用结果，直接提供最终答案，不要再次调用工具。"
                 else:
                     # 正常对话，可以继续调用工具
                     if result["tool_calls"]:
-                        tool_context = self._build_tool_context(result["tool_calls"])
+                        tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                         
                         # 构建已调用工具及参数的简洁列表
                         called_tools_info = []
@@ -333,7 +333,7 @@ class Agent:
                 
                 # 构建当前轮次的提示词
                 if force_final_answer:
-                    tool_context = self._build_tool_context(result["tool_calls"])
+                    tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                     notice = final_answer_notice or "⚠️ 检测到你已连续多次重复调用相同工具，请基于已有信息直接提供最终答案，禁止再次调用工具。"
                     segments = [current_prompt]
                     if tool_context:
@@ -345,13 +345,13 @@ class Agent:
                     effective_prompt = current_prompt
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
                     # 连续工具调用过多，要求提供最终答案
-                    tool_context = self._build_tool_context(result["tool_calls"])
+                    tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                     effective_prompt = f"{current_prompt}\n\n{tool_context}\n\
 你已经调用了多个工具，请基于以上所有工具调用结果，直接提供最终答案，不要再次调用工具。"
                 else:
                     # 正常对话，可以继续调用工具
                     if result["tool_calls"]:
-                        tool_context = self._build_tool_context(result["tool_calls"])
+                        tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                         effective_prompt = f"{current_prompt}\n\n{tool_context}\n\
 首先你需要思考是否需要更多信息，如果需要则继续调用工具，返回类型为(tool_call)。\n\
 如果信息足够回答则基于现有信息给出最终回答返回类型为(str)，不要询问用户是否确认，不要重复调用相同的工具和相同参数。"
@@ -487,13 +487,14 @@ class Agent:
                 return False
         return True
 
-    def _build_tool_context(self, tool_calls: List[Dict]) -> str:
+    def _build_tool_context(self, tool_calls: List[Dict], current_prompt: str) -> str:
         """构建工具调用上下文"""
         if not tool_calls:
             return ""
         
         context = "已执行的工具调用及结果:\n"
         context_array=[]
+        context_array.append({"role": "system", "content": f"{current_prompt}"})
         for i, call in enumerate(tool_calls, 1):
             # context += f"{i}. 调用工具 {call}\n"
             context_array.append(f"{i}. 调用工具 {call}\n")

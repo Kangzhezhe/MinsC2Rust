@@ -61,14 +61,14 @@ def build_tool_template(tool_names, param_models):
     构建通用tool_call模板，工具名为{name:str}，参数为所有工具的联合
     直接用参数模型Model构建template，语法使用 {args:json:Model}
     """
-    # args_examples = []
-    # for tool_name, param_model in param_models.items():
-    #     args_examples.append(
-    #         f'{tool_name}的args为: {{{param_model.__name__}}}'
-    #     )
+    args_examples = []
+    for tool_name, param_model in param_models.items():
+        args_examples.append(
+            f'{tool_name}的args为: {{{param_model.__name__}}}'
+        )
     template = '{"tool_call":{"name":{name:str},"args":{args:json:对应工具参数Model}}}'
-    # example = '\n'.join(args_examples)
-    example = "一个工具tool_name对应的args Model为: Tool_nameParams"
+    example = '\n'.join(args_examples)
+    # example = "一个工具tool_name对应的args Model为: Tool_nameParams"
     return template, example
 
 

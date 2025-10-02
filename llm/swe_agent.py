@@ -1,22 +1,43 @@
+import atexit
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+from contextlib import suppress
+from urllib.parse import unquote, urlparse
 
-from pydantic import BaseModel,Field, RootModel
+from pydantic import BaseModel, Field, RootModel, ValidationError
 
 from .agent import Agent
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from analyzer.analyzer import Analyzer
+
+import pylspclient
+from pylspclient.lsp_pydantic_strcuts import (
+    LanguageIdentifier,
+    DocumentSymbol,
+    Location,
+    LocationLink,
+    Position,
+    Range,
+    ReferenceContext,
+    ReferenceParams,
+    SymbolInformation,
+    SymbolKind,
+    TextDocumentIdentifier,
+    TextDocumentItem,
+)
 
 class ToolOperation(BaseModel):
     tool: str = Field(description='要调用的工具方法名')
@@ -802,15 +823,21 @@ class SWEFileSystemTools:
             - `instructions` 必须由第一人称一句话组成，用来明确你打算进行的修改，如“我将更新处理函数以记录错误”。保持简短有助于下游模型正确理解意图。
             - 在 `code_edit` 中提供完整编辑内容，支持两种写法：
 
-            1. **完整重写**：提供目标文件的全部内容（允许使用 Markdown 代码块包裹）。文件会被按给出的文本直接创建或覆盖。
+            1. **完整重写**：提供目标文件的全部内容。文件会被按给出的文本直接创建或覆盖。
             2. **片段编辑**：尽量减少未修改文本，并使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。请提供足够的上下文以便唯一定位每段修改，若无法匹配将抛出错误并提示补充上下文或改用 diff。
 
             - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
             - 修改同一文件应集中在一次 `edit_file` 调用中；如需编辑多个文件，请并行发起多次调用，每次对应一个文件。
             - `target_file` 建议使用工作区内的相对路径，也支持绝对路径（会保持原值）。
-
-            成功时返回执行元信息（模式、写入字节等）；若无法安全应用，抛出 `SWEAgentToolError`。
-        """
+            例如： 只修改文件中的main函数片段
+#include <stdio.h>
+// ... existing code ...
+int main() {
+    printf("Hi!\\n");
+    return 0;
+}
+// ... existing code ...
+"""
         if not code_edit or not code_edit.strip():
             raise SWEAgentToolError("code_edit 不能为空")
 
@@ -988,6 +1015,903 @@ class SWEFileSystemTools:
                     pass
 
 
+@dataclass
+class _LspSession:
+    process: subprocess.Popen
+    client: pylspclient.LspClient
+    endpoint: pylspclient.LspEndpoint
+    language: str
+    language_id: LanguageIdentifier
+    opened_documents: Dict[Path, int] = field(default_factory=dict)
+
+    def is_alive(self) -> bool:
+        return self.process.poll() is None
+
+
+@dataclass
+class _SymbolLocation:
+    session: _LspSession
+    language: str
+    location: Location
+    name: str
+    kind: Optional[SymbolKind]
+    container: Optional[str]
+    abs_path: Path
+    rel_path: str
+
+
+class SWELspTools:
+    """基于 LSP 的跨语言符号查询工具集。"""
+
+    _PYTHON_EXECUTABLE: str = sys.executable or "python3"
+
+    DEFAULT_LANGUAGE_SERVERS: Dict[str, Sequence[Sequence[str]]] = {
+        "python": (
+            ("pylsp",),
+            (_PYTHON_EXECUTABLE, "-m", "pylsp"),
+        ),
+        "c": (("clangd", "--background-index"),),
+        "rust": (("rust-analyzer",),),
+    }
+
+    DEFAULT_CLIENT_CAPABILITIES: Dict[str, Any] = {
+        "textDocument": {
+            "definition": {"dynamicRegistration": False},
+            "references": {"dynamicRegistration": False},
+            "documentSymbol": {"dynamicRegistration": False},
+        },
+        "workspace": {
+            "symbol": {"dynamicRegistration": False},
+        },
+    }
+
+    EXTENSION_LANGUAGE_MAP: Dict[str, str] = {
+        ".py": "python",
+        ".pyi": "python",
+        ".c": "c",
+        ".h": "c",
+        ".hpp": "c",
+        ".hh": "c",
+        ".rs": "rust",
+    }
+
+    LANGUAGE_IDENTIFIERS: Dict[str, LanguageIdentifier] = {
+        "python": LanguageIdentifier.PYTHON,
+        "c": LanguageIdentifier.C,
+        "rust": LanguageIdentifier.RUST,
+    }
+
+    LANGUAGE_FILE_PATTERNS: Dict[str, Tuple[str, ...]] = {
+        "python": ("*.py", "*.pyi"),
+        "c": ("*.c", "*.h", "*.hpp", "*.hh"),
+        "rust": ("*.rs",),
+    }
+
+    MAX_SYMBOL_CANDIDATES: int = 64
+    MAX_FALLBACK_FILES_PER_LANGUAGE: int = 200
+
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        *,
+        encoding: str = "utf-8",
+        command_timeout: int = 10,
+    language_servers: Optional[Dict[str, Union[str, Sequence[str], Sequence[Sequence[str]]]]] = None,
+        language_capabilities: Optional[Dict[str, Dict[str, Any]]] = None,
+        generate_compile_commands: bool = False,
+    ) -> None:
+        self.workspace_root = Path(workspace_root).expanduser().resolve()
+        if not self.workspace_root.exists() or not self.workspace_root.is_dir():
+            raise ValueError(f"工作目录不存在或不是文件夹: {workspace_root}")
+
+        self.encoding = encoding
+        self.command_timeout = command_timeout
+        self.generate_compile_commands = generate_compile_commands
+
+        self.language_servers = self._normalize_language_servers(language_servers)
+        self.language_capabilities = language_capabilities or {}
+
+        self._sessions: Dict[str, _LspSession] = {}
+        self._sessions_lock = threading.RLock()
+        self._file_lines_cache: Dict[Path, List[str]] = {}
+        self._document_text_cache: Dict[Path, str] = {}
+        self._symbol_presence_cache: Dict[Tuple[str, str], bool] = {}
+        self._language_sources_cache: Dict[str, bool] = {}
+
+        atexit.register(self.close)
+
+    # ------------------------------------------------------------------
+    # 初始化与清理
+    # ------------------------------------------------------------------
+    def _normalize_language_servers(
+        self,
+        overrides: Optional[Dict[str, Union[str, Sequence[str], Sequence[Sequence[str]]]]],
+    ) -> Dict[str, List[List[str]]]:
+        normalized: Dict[str, List[List[str]]] = {}
+        merged: Dict[str, Union[str, Sequence[str], Sequence[Sequence[str]]]] = dict(self.DEFAULT_LANGUAGE_SERVERS)
+        if overrides:
+            for lang, cmd in overrides.items():
+                merged[lang.lower()] = cmd
+
+        def add_candidate(container: List[List[str]], candidate: Union[str, Sequence[str]]) -> None:
+            if isinstance(candidate, str):
+                parts = shlex.split(candidate)
+            else:
+                parts = [str(part) for part in candidate]
+            if parts:
+                container.append(parts)
+
+        for language, command in merged.items():
+            candidates: List[List[str]] = []
+            if isinstance(command, str):
+                add_candidate(candidates, command)
+            elif isinstance(command, Sequence):
+                if command and isinstance(command[0], Sequence) and not isinstance(command[0], (str, bytes)):
+                    for nested in command:  # type: ignore[assignment]
+                        add_candidate(candidates, nested)  # type: ignore[arg-type]
+                else:
+                    add_candidate(candidates, command)
+            else:
+                raise TypeError(f"不支持的语言服务器配置: {command!r}")
+
+            if not candidates:
+                raise SWEAgentToolError(f"语言 {language} 未配置可用的语言服务器命令")
+            normalized[language] = candidates
+        return normalized
+
+    def close(self) -> None:
+        with self._sessions_lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+
+        for session in sessions:
+            try:
+                if session.client is not None:
+                    with suppress(Exception):
+                        session.client.shutdown()
+                    with suppress(Exception):
+                        session.client.exit()
+            finally:
+                if session.process.poll() is None:
+                    session.process.terminate()
+                    with suppress(Exception):
+                        session.process.wait(timeout=3)
+                    if session.process.poll() is None:
+                        with suppress(Exception):
+                            session.process.kill()
+
+    # ------------------------------------------------------------------
+    # 路径与缓存处理
+    # ------------------------------------------------------------------
+    def _is_within_root(self, path: Path) -> bool:
+        try:
+            path.relative_to(self.workspace_root)
+            return True
+        except ValueError:
+            return False
+
+    def _relative_to_root(self, path: Path) -> str:
+        return path.relative_to(self.workspace_root).as_posix()
+
+    def _resolve_path(self, path: str | os.PathLike[str]) -> Path:
+        candidate = (self.workspace_root / Path(path)).expanduser()
+        resolved = candidate.resolve(strict=False)
+        if not self._is_within_root(resolved):
+            raise SWEAgentToolError("路径越界：禁止访问工作目录之外的文件")
+        return resolved
+
+    def _build_path_filter(
+        self,
+        file_paths: Optional[List[str]],
+    ) -> Tuple[Callable[[str], bool], List[str]]:
+        if not file_paths:
+            return (lambda _rel: True), []
+
+        filters: List[Tuple[Path, bool]] = []
+        normalized: List[str] = []
+        for raw_path in file_paths:
+            resolved = self._resolve_path(raw_path)
+            filters.append((resolved, resolved.is_dir()))
+            normalized.append(self._relative_to_root(resolved))
+
+        def matcher(rel_path: str) -> bool:
+            abs_path = (self.workspace_root / Path(rel_path)).resolve()
+            for base, is_dir in filters:
+                if is_dir:
+                    try:
+                        abs_path.relative_to(base)
+                        return True
+                    except ValueError:
+                        continue
+                if abs_path == base:
+                    return True
+            return False
+
+        return matcher, normalized
+
+    def _iter_language_files(self, language: str) -> Iterable[Path]:
+        patterns = self.LANGUAGE_FILE_PATTERNS.get(language.lower(), ())
+        seen: Set[Path] = set()
+        for pattern in patterns:
+            for candidate in self.workspace_root.rglob(pattern):
+                if not candidate.is_file():
+                    continue
+                try:
+                    resolved = candidate.resolve(strict=False)
+                except OSError:
+                    continue
+                if resolved in seen:
+                    continue
+                if not self._is_within_root(resolved):
+                    continue
+                seen.add(resolved)
+                yield resolved
+
+    def _language_has_sources(self, language: str) -> bool:
+        cached = self._language_sources_cache.get(language)
+        if cached is not None:
+            return cached
+
+        has_sources = False
+        for _ in self._iter_language_files(language):
+            has_sources = True
+            break
+
+        if language == "rust" and has_sources:
+            has_cargo = any(
+                file_path.name in {"Cargo.toml", "rust-project.json"}
+                for file_path in self.workspace_root.rglob("Cargo.toml")
+            ) or any(
+                file_path.name == "rust-project.json"
+                for file_path in self.workspace_root.rglob("rust-project.json")
+            )
+            has_sources = has_sources and has_cargo
+
+        self._language_sources_cache[language] = has_sources
+        return has_sources
+
+    def _language_has_symbol(self, language: str, symbol: str) -> bool:
+        cache_key = (language, symbol)
+        cached = self._symbol_presence_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        found = False
+        scanned = 0
+        for path in self._iter_language_files(language):
+            if scanned >= self.MAX_FALLBACK_FILES_PER_LANGUAGE:
+                break
+            scanned += 1
+            try:
+                text = self._get_document_text(path)
+            except SWEAgentToolError:
+                continue
+            if symbol in text:
+                found = True
+                break
+
+        self._symbol_presence_cache[cache_key] = found
+        return found
+
+    def _detect_languages_for_symbol(
+        self,
+        symbol: str,
+        normalized_filters: List[str],
+    ) -> List[str]:
+        candidate_languages: Set[str] = set()
+
+        for rel in normalized_filters:
+            try:
+                resolved = (self.workspace_root / Path(rel)).resolve()
+            except Exception:
+                continue
+            if resolved.is_file():
+                language = self.EXTENSION_LANGUAGE_MAP.get(resolved.suffix.lower())
+                if language:
+                    candidate_languages.add(language)
+            elif resolved.is_dir():
+                for child in resolved.rglob("*"):
+                    if not child.is_file():
+                        continue
+                    language = self.EXTENSION_LANGUAGE_MAP.get(child.suffix.lower())
+                    if language:
+                        candidate_languages.add(language)
+                        break
+
+        if candidate_languages:
+            return [language for language in self.language_servers if language in candidate_languages]
+
+        languages_with_symbol: List[str] = []
+        for language in self.language_servers:
+            if not self._language_has_sources(language):
+                continue
+            if self._language_has_symbol(language, symbol):
+                languages_with_symbol.append(language)
+
+        if languages_with_symbol:
+            return languages_with_symbol
+
+        fallback_languages = [language for language in self.language_servers if self._language_has_sources(language)]
+        if fallback_languages:
+            return fallback_languages
+
+        return list(self.language_servers.keys())
+
+    @staticmethod
+    def _is_method_not_found_error(message: str) -> bool:
+        lowered = message.lower()
+        return "method not found" in lowered or "-32601" in lowered
+
+    def _uri_to_path(self, uri: str) -> Path:
+        parsed = urlparse(uri)
+        if parsed.scheme != "file":
+            raise ValueError(f"Unsupported URI scheme: {uri}")
+        path = Path(unquote(parsed.path)).resolve()
+        return path
+
+    def _get_document_text(self, path: Path) -> str:
+        cached = self._document_text_cache.get(path)
+        if cached is not None:
+            return cached
+        try:
+            text = path.read_text(encoding=self.encoding)
+        except OSError as exc:
+            raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
+        self._document_text_cache[path] = text
+        return text
+
+    def _get_file_lines(self, path: Path) -> List[str]:
+        cached = self._file_lines_cache.get(path)
+        if cached is not None:
+            return cached
+        try:
+            lines = path.read_text(encoding=self.encoding).splitlines(keepends=True)
+        except OSError as exc:
+            raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
+        self._file_lines_cache[path] = lines
+        return lines
+
+    def _extract_snippet(
+        self,
+        path: Path,
+        start_line_zero: int,
+        end_line_zero: int,
+        include_end_line: bool,
+    ) -> str:
+        lines = self._get_file_lines(path)
+        start_idx = max(start_line_zero, 0)
+        end_idx = max(end_line_zero, start_idx)
+        slice_end = end_idx + 1 if include_end_line else start_idx + 1
+        slice_end = min(slice_end, len(lines))
+        snippet_lines = lines[start_idx:slice_end]
+        return "".join(snippet_lines).rstrip("\n")
+
+    # ------------------------------------------------------------------
+    # 会话管理
+    # ------------------------------------------------------------------
+    def _ensure_session(self, language: str) -> _LspSession:
+        language = language.lower()
+        if language not in self.language_servers:
+            raise SWEAgentToolError(f"未配置语言服务器: {language}")
+
+        with self._sessions_lock:
+            session = self._sessions.get(language)
+            if session and session.is_alive():
+                return session
+
+            if session:
+                self._shutdown_session(session)
+
+            candidates = self.language_servers[language]
+
+            if language == "c" and self.generate_compile_commands:
+                with suppress(Exception):
+                    self._ensure_compile_commands()
+
+            errors: List[str] = []
+
+            for candidate in candidates:
+                command = list(candidate)
+                if not command:
+                    continue
+
+                resolved_exec = shutil.which(command[0]) or command[0]
+                if shutil.which(resolved_exec) is None and not Path(resolved_exec).exists():
+                    errors.append(f"{language}: 找不到语言服务器可执行文件 {command[0]}")
+                    continue
+                command[0] = resolved_exec
+
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        cwd=self.workspace_root,
+                    )
+                except FileNotFoundError as exc:
+                    errors.append(f"{language}: 启动语言服务器失败 {command[0]} ({exc})")
+                    continue
+
+                if process.stdin is None or process.stdout is None:
+                    process.terminate()
+                    errors.append(f"{language}: 语言服务器启动失败：无法连接标准输入输出")
+                    continue
+
+                json_rpc = pylspclient.JsonRpcEndpoint(process.stdin, process.stdout)
+                endpoint = pylspclient.LspEndpoint(
+                    json_rpc,
+                    timeout=self.command_timeout,
+                    notify_callbacks={"textDocument/publishDiagnostics": self._handle_publish_diagnostics},
+                )
+                client = pylspclient.LspClient(endpoint)
+
+                capabilities = self.language_capabilities.get(language) or self.DEFAULT_CLIENT_CAPABILITIES
+                try:
+                    client.initialize(
+                        processId=os.getpid(),
+                        rootPath=None,
+                        rootUri=self.workspace_root.as_uri(),
+                        initializationOptions=None,
+                        capabilities=capabilities,
+                        trace="off",
+                        workspaceFolders=None,
+                    )
+                    client.initialized()
+                except Exception as exc:
+                    errors.append(
+                        f"{language}: 初始化语言服务器失败 ({' '.join(command)}) - {exc}"
+                    )
+                    with suppress(Exception):
+                        endpoint.stop()
+                    process.terminate()
+                    with suppress(Exception):
+                        process.wait(timeout=3)
+                    continue
+
+                language_id = self.LANGUAGE_IDENTIFIERS.get(language)
+                if language_id is None:
+                    with suppress(Exception):
+                        endpoint.stop()
+                    process.terminate()
+                    with suppress(Exception):
+                        process.wait(timeout=3)
+                    raise SWEAgentToolError(f"暂不支持该语言: {language}")
+
+                session = _LspSession(
+                    process=process,
+                    client=client,
+                    endpoint=endpoint,
+                    language=language,
+                    language_id=language_id,
+                )
+                self._sessions[language] = session
+                return session
+
+            if errors:
+                raise SWEAgentToolError("; ".join(errors))
+            raise SWEAgentToolError(f"未能启动语言 {language} 的语言服务器")
+
+    def _shutdown_session(self, session: _LspSession) -> None:
+        with suppress(Exception):
+            session.client.shutdown()
+        with suppress(Exception):
+            session.client.exit()
+        if session.process.poll() is None:
+            session.process.terminate()
+            with suppress(Exception):
+                session.process.wait(timeout=3)
+            if session.process.poll() is None:
+                with suppress(Exception):
+                    session.process.kill()
+
+    @staticmethod
+    def _handle_publish_diagnostics(params: Optional[dict]) -> None:  # noqa: D401
+        """忽略诊断信息回调。"""
+
+    def _ensure_compile_commands(self) -> Optional[Path]:
+        compile_commands = self.workspace_root / "compile_commands.json"
+        if compile_commands.exists():
+            return compile_commands
+
+        entries: List[Dict[str, Any]] = []
+        for c_file in self.workspace_root.rglob("*.c"):
+            rel = c_file.relative_to(self.workspace_root)
+            entries.append(
+                {
+                    "directory": str(self.workspace_root),
+                    "command": f"clang -std=c11 -I{self.workspace_root} -c {rel.as_posix()}",
+                    "file": str((self.workspace_root / rel).resolve()),
+                }
+            )
+
+        if not entries:
+            return None
+
+        compile_commands.write_text(json.dumps(entries, indent=2))
+        return compile_commands
+
+    # ------------------------------------------------------------------
+    # 文档管理
+    # ------------------------------------------------------------------
+    def _ensure_document_open(self, session: _LspSession, path: Path, *, uri: Optional[str] = None) -> str:
+        text = self._get_document_text(path)
+        if path not in session.opened_documents:
+            document_uri = uri or path.as_uri()
+            session.client.didOpen(
+                TextDocumentItem(
+                    uri=document_uri,
+                    languageId=session.language_id,
+                    version=1,
+                    text=text,
+                )
+            )
+            session.opened_documents[path] = 1
+        return text
+
+    # ------------------------------------------------------------------
+    # 符号查询
+    # ------------------------------------------------------------------
+    def _workspace_symbol_query(self, session: _LspSession, symbol: str) -> List[SymbolInformation]:
+        try:
+            raw_result = session.client.lsp_endpoint.call_method("workspace/symbol", query=symbol)
+        except Exception as exc:
+            raise SWEAgentToolError(f"workspace/symbol 调用失败: {exc}") from exc
+
+        if not raw_result:
+            return []
+
+        infos: List[SymbolInformation] = []
+        for item in raw_result[: self.MAX_SYMBOL_CANDIDATES]:
+            try:
+                info = SymbolInformation.model_validate(item)
+            except ValidationError:
+                continue
+            infos.append(info)
+        return infos
+
+    def _extract_symbol_infos_from_document(
+        self,
+        items: Sequence[Union[DocumentSymbol, SymbolInformation]],
+        uri: str,
+        symbol: str,
+    ) -> List[SymbolInformation]:
+        results: List[SymbolInformation] = []
+
+        if not items:
+            return results
+
+        def normalize_kind(value: Any) -> SymbolKind:
+            if isinstance(value, SymbolKind):
+                return value
+            try:
+                return SymbolKind(int(value))
+            except Exception:
+                return SymbolKind.Function
+
+        def handle_document_symbol(node: DocumentSymbol, container: Optional[str]) -> None:
+            if node.name == symbol:
+                results.append(
+                    SymbolInformation(
+                        name=node.name,
+                        kind=normalize_kind(node.kind),
+                        deprecated=node.deprecated,
+                        location=Location(uri=uri, range=node.range),
+                        containerName=container,
+                    )
+                )
+            for child in node.children or []:
+                handle_document_symbol(child, node.name)
+
+        first = items[0]
+        if isinstance(first, DocumentSymbol):
+            for node in items:  # type: ignore[assignment]
+                if isinstance(node, DocumentSymbol):
+                    handle_document_symbol(node, None)
+        else:
+            for item in items:
+                if isinstance(item, SymbolInformation) and item.name == symbol:
+                    results.append(item)
+        return results[: self.MAX_SYMBOL_CANDIDATES]
+
+    def _fallback_symbol_query_document_symbols(
+        self,
+        session: _LspSession,
+        symbol: str,
+        matches_path: Callable[[str], bool],
+    ) -> List[SymbolInformation]:
+        patterns = self.LANGUAGE_FILE_PATTERNS.get(session.language, ())
+        if not patterns:
+            raise SWEAgentToolError("该语言不支持 fallback 文档扫描")
+
+        results: List[SymbolInformation] = []
+        seen_locations: Set[Tuple[str, int, int, int, int]] = set()
+        scanned_files = 0
+
+        for path in self._iter_language_files(session.language):
+            rel_path = self._relative_to_root(path)
+            if not matches_path(rel_path):
+                continue
+            try:
+                text = self._get_document_text(path)
+            except SWEAgentToolError:
+                continue
+            if symbol not in text:
+                continue
+
+            scanned_files += 1
+            if scanned_files > self.MAX_FALLBACK_FILES_PER_LANGUAGE:
+                break
+
+            uri = path.as_uri()
+            try:
+                self._ensure_document_open(session, path, uri=uri)
+                symbols = session.client.documentSymbol(TextDocumentIdentifier(uri=uri))
+            except Exception:
+                continue
+
+            if not symbols:
+                continue
+
+            infos = self._extract_symbol_infos_from_document(symbols, uri, symbol)
+            for info in infos:
+                location = info.location
+                loc_key = (
+                    location.uri,
+                    location.range.start.line,
+                    location.range.start.character,
+                    location.range.end.line,
+                    location.range.end.character,
+                )
+                if loc_key in seen_locations:
+                    continue
+                seen_locations.add(loc_key)
+                results.append(info)
+                if len(results) >= self.MAX_SYMBOL_CANDIDATES:
+                    return results
+
+        return results
+
+    def _collect_symbol_locations(
+        self,
+        symbol: str,
+        matches_path: Callable[[str], bool],
+        candidate_languages: Sequence[str],
+    ) -> Tuple[List[_SymbolLocation], List[str]]:
+        locations: List[_SymbolLocation] = []
+        errors: List[str] = []
+
+        if not candidate_languages:
+            return locations, ["未检测到可用语言服务器"]
+
+        for language in candidate_languages:
+            try:
+                session = self._ensure_session(language)
+            except Exception as exc:
+                errors.append(f"{language}: {exc}")
+                continue
+
+            used_fallback = False
+            try:
+                symbol_infos = self._workspace_symbol_query(session, symbol)
+            except SWEAgentToolError as exc:
+                message = str(exc)
+                if self._is_method_not_found_error(message):
+                    try:
+                        symbol_infos = self._fallback_symbol_query_document_symbols(session, symbol, matches_path)
+                        used_fallback = True
+                    except SWEAgentToolError as fb_exc:
+                        errors.append(f"{language}: {fb_exc}")
+                        continue
+                else:
+                    errors.append(f"{language}: {exc}")
+                    continue
+
+            if not symbol_infos and not used_fallback:
+                try:
+                    symbol_infos = self._fallback_symbol_query_document_symbols(session, symbol, matches_path)
+                except SWEAgentToolError as fb_exc:
+                    errors.append(f"{language}: {fb_exc}")
+                    symbol_infos = []
+
+            for info in symbol_infos:
+                if info.name != symbol:
+                    continue
+                try:
+                    abs_path = self._uri_to_path(info.location.uri)
+                except Exception:
+                    continue
+                if not self._is_within_root(abs_path):
+                    continue
+                rel_path = self._relative_to_root(abs_path)
+                if not matches_path(rel_path):
+                    continue
+                locations.append(
+                    _SymbolLocation(
+                        session=session,
+                        language=language,
+                        location=info.location,
+                        name=info.name,
+                        kind=info.kind,
+                        container=info.containerName,
+                        abs_path=abs_path,
+                        rel_path=rel_path,
+                    )
+                )
+
+        return locations, errors
+
+    @staticmethod
+    def _symbol_kind_name(kind: Optional[SymbolKind]) -> Optional[str]:
+        return kind.name if isinstance(kind, SymbolKind) else None
+
+    # ------------------------------------------------------------------
+    # 对外工具接口
+    # ------------------------------------------------------------------
+    def lsp_list_symbol_definitions(
+        self,
+        symbolName: str,
+        filePaths: Optional[List[str]] = None,
+        include_definition_text: bool = False,
+    ) -> Dict[str, Any]:
+        symbol = (symbolName or "").strip()
+        if not symbol:
+            raise SWEAgentToolError("symbolName 不能为空")
+
+        matches_path, normalized_filters = self._build_path_filter(filePaths)
+        candidate_languages = self._detect_languages_for_symbol(symbol, normalized_filters)
+        locations, errors = self._collect_symbol_locations(symbol, matches_path, candidate_languages)
+
+        if not locations:
+            if errors:
+                raise SWEAgentToolError("; ".join(errors))
+            raise SWEAgentToolError(f"未找到符号: {symbol}")
+
+        definitions: List[Dict[str, Any]] = []
+        for loc in locations:
+            start = loc.location.range.start
+            end = loc.location.range.end
+            entry: Dict[str, Any] = {
+                "file": loc.rel_path,
+                "start_line": start.line + 1,
+                "end_line": end.line + 1,
+                "language": loc.language,
+                "symbol": loc.name,
+                "symbol_kind": self._symbol_kind_name(loc.kind),
+                "container": loc.container,
+            }
+            if include_definition_text:
+                snippet = self._extract_snippet(
+                    loc.abs_path,
+                    start.line,
+                    end.line,
+                    include_end_line=True,
+                )
+                entry["definition"] = snippet
+            definitions.append(entry)
+
+        result: Dict[str, Any] = {
+            "tool": "lsp_list_symbol_definitions",
+            "symbol": symbol,
+            "definitions": definitions,
+            "filters": normalized_filters,
+            "include_definition_text": include_definition_text,
+        }
+        if errors:
+            result["warnings"] = errors
+        return result
+
+    def lsp_list_symbol_usages(
+        self,
+        symbolName: str,
+        max_results: int,
+        filePaths: Optional[List[str]] = None,
+        include_end_line: bool = True,
+    ) -> Dict[str, Any]:
+        symbol = (symbolName or "").strip()
+        if not symbol:
+            raise SWEAgentToolError("symbolName 不能为空")
+        if max_results <= 0:
+            raise SWEAgentToolError("max_results 必须是正整数")
+
+        matches_path, normalized_filters = self._build_path_filter(filePaths)
+        candidate_languages = self._detect_languages_for_symbol(symbol, normalized_filters)
+        locations, errors = self._collect_symbol_locations(symbol, matches_path, candidate_languages)
+
+        if not locations:
+            if errors:
+                raise SWEAgentToolError("; ".join(errors))
+            raise SWEAgentToolError(f"未找到符号: {symbol}")
+
+        usages: List[Dict[str, Any]] = []
+        seen: Set[Tuple[str, int, int]] = set()
+        truncated = False
+        reference_errors: List[str] = []
+
+        for loc in locations:
+            try:
+                self._ensure_document_open(loc.session, loc.abs_path, uri=loc.location.uri)
+            except SWEAgentToolError as exc:
+                reference_errors.append(f"{loc.rel_path}: {exc}")
+                continue
+
+            origin_start = loc.location.range.start
+            document_uri = loc.location.uri
+            params = ReferenceParams(
+                textDocument=TextDocumentIdentifier(uri=document_uri),
+                position=Position(line=origin_start.line, character=origin_start.character),
+                context=ReferenceContext(includeDeclaration=False),
+            )
+
+            try:
+                raw_refs = loc.session.client.lsp_endpoint.call_method(
+                    "textDocument/references",
+                    **params.model_dump(),
+                )
+            except Exception as exc:
+                reference_errors.append(f"{loc.rel_path}: {exc}")
+                continue
+
+            for item in raw_refs or []:
+                try:
+                    reference = Location.model_validate(item)
+                except ValidationError:
+                    continue
+
+                try:
+                    ref_path = self._uri_to_path(reference.uri)
+                except Exception:
+                    continue
+                if not self._is_within_root(ref_path):
+                    continue
+                rel_ref_path = self._relative_to_root(ref_path)
+                if not matches_path(rel_ref_path):
+                    continue
+
+                start = reference.range.start
+                dedup_key = (reference.uri, start.line, start.character)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                snippet = self._extract_snippet(
+                    ref_path,
+                    start.line,
+                    reference.range.end.line,
+                    include_end_line=include_end_line,
+                )
+
+                usages.append(
+                    {
+                        "file": rel_ref_path,
+                        "start_line": start.line + 1,
+                        "end_line": reference.range.end.line + 1,
+                        "dependency_type": "reference",
+                        "snippet": snippet,
+                    }
+                )
+
+                if len(usages) >= max_results:
+                    truncated = True
+                    break
+
+            if truncated:
+                break
+
+        result: Dict[str, Any] = {
+            "tool": "lsp_list_symbol_usages",
+            "symbol": symbol,
+            "usages": usages,
+            "limit": max_results,
+            "truncated": truncated,
+            "filters": normalized_filters,
+        }
+        combined_errors = errors + reference_errors
+        if combined_errors:
+            result["warnings"] = combined_errors
+        return result
+
+
 class SWEAgent(Agent):
     """在现有Agent框架基础上提供SWE-agent风格能力。"""
 
@@ -1011,6 +1935,9 @@ class SWEAgent(Agent):
         instructions: Optional[str] = None,
         extra_instructions: Optional[str] = None,
         toolset: Optional[SWEFileSystemTools] = None,
+        lsp_toolset: Optional[SWELspTools] = None,
+        enable_lsp_tools: bool = True,
+        lsp_options: Optional[Dict[str, Any]] = None,
         llm_instance=None,
         encoding: str = "utf-8",
         command_timeout: int = 120,
@@ -1033,27 +1960,48 @@ class SWEAgent(Agent):
             max_output_chars=max_output_chars,
         )
 
+        self.lsp_toolset = None
+        if enable_lsp_tools:
+            if lsp_toolset is not None:
+                self.lsp_toolset = lsp_toolset
+            else:
+                options = dict(lsp_options or {})
+                options.setdefault("encoding", encoding)
+                options.setdefault("command_timeout", 10)
+                self.lsp_toolset = SWELspTools(
+                    workspace_root=self.workspace_root,
+                    **options,
+                )
+
         super().__init__(llm_instance=llm_instance, **agent_kwargs)
         self.register_tools(self._default_tools())
 
     def _default_tools(self) -> List[Any]:
-        return [
+        tools = [
             self.toolset.list_dir,
             self.toolset.file_search,
             self.toolset.file_exists,
             self.toolset.read_file,
             self.toolset.write_file,
-            self.toolset.append_file,
+            # self.toolset.append_file,
             self.toolset.grep_search,
-            self.toolset.search_replace,
+            # self.toolset.search_replace,
             self.toolset.run_command,
             # self.toolset.run_tests,
             # self.toolset.apply_patch,
             self.toolset.edit_file,
             self.toolset.run_tools_parallel,
-            self.toolset.list_symbol_usages,
-            self.toolset.list_symbol_definitions,
+            # self.toolset.list_symbol_usages,
+            # self.toolset.list_symbol_definitions,
         ]
+        if self.lsp_toolset is not None:
+            tools.extend(
+                [
+                    self.lsp_toolset.lsp_list_symbol_definitions,
+                    self.lsp_toolset.lsp_list_symbol_usages,
+                ]
+            )
+        return tools
 
     def build_prompt(
         self,
@@ -1106,3 +2054,7 @@ class SWEAgent(Agent):
     def available_tool_names(self) -> List[str]:
         """获取当前注册的工具名称列表。"""
         return self.get_available_tools()
+
+    def close(self) -> None:
+        if self.lsp_toolset:
+            self.lsp_toolset.close()

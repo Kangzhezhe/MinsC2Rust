@@ -12,3 +12,4 @@ __pycache__/
 temp/
 rag_chroma_db/
 .pytest_cache/
+pylspclient/

@@ -29,6 +29,7 @@ def prepare_fix_workspace() -> Path:
         shutil.rmtree(workspace)
 
     source_project = REPO_ROOT / "benchmarks" /"c-algorithm"
+    # source_project = REPO_ROOT / "pylspclient/tests/test_rust_workspace"
     if not source_project.exists():
         msg = f"源项目不存在: {source_project}"
         raise FileNotFoundError(msg)
@@ -106,6 +107,27 @@ def demonstrate_symbol(agent: SWEAgent, max_rounds: int = 5) -> None:
     print("\n代理回复:")
     print(response.get("tool_calls", []))
     print(response["final_response"])
+
+def demonstrate_symbol_rust(agent: SWEAgent, max_rounds: int = 5) -> None:
+    task_description = textwrap.dedent(
+        f"""
+        帮我搜索项目中的符号 subtract 的定义和所有引用
+        """
+    ).strip()
+
+    response = agent.run_task(
+        task_description,
+        acceptance_criteria=[
+            "解释subtract 符号是什么",
+            "列出所有 subtract 的定义位置和引用位置",
+            "对于每个定义，搜索查看他在代码中的详细定义，包括每个字段",
+            "对于每个引用，搜索查看他的代码解释它是如何使用 subtract 的",
+        ],
+    )
+
+    print("\n代理回复:")
+    print(response.get("tool_calls", []))
+    print(response["final_response"])
        
 
 
@@ -119,7 +141,7 @@ def main() -> None:
         max_iterations=20,
         command_timeout=90,
         # memory_strategy={"name": "tokenlimit", "max_tokens": 2000},
-        memory_strategy={"name": "summary", "token_trigger_max_tokens": 4000},
+        memory_strategy={"name": "summary", "token_trigger_max_tokens": 3000},
     )
 
     print("SWEAgent 代码理解演示")
@@ -128,6 +150,9 @@ def main() -> None:
     # demonstrate_search(agent)
     # demonstrate_compile(agent)
     demonstrate_symbol(agent)
+    # demonstrate_symbol_rust(agent)
+
+    agent.close()
 
 
 if __name__ == "__main__":

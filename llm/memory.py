@@ -237,7 +237,7 @@ class SummaryStrategy(BaseMemoryStrategy):
         summarizer: Callable[[str], str],
         *,
         keep_recent: int = 4,
-        summary_max_tokens: int = 1000,
+        summary_max_tokens: int = 3000,
         checkpoint_interval: int = 10,
         token_trigger_max_tokens: Optional[int] = None,
         token_counter: Optional[Callable[[Mapping[str, Any]], int]] = None,
@@ -306,6 +306,7 @@ class SummaryStrategy(BaseMemoryStrategy):
         start_index: int,
         end_index: int,
         previous_summary: Optional[_Checkpoint],
+        system_messages: Optional[Sequence[Message]] = None,
     ) -> _Checkpoint:
         if previous_summary is not None and start_index < previous_summary.message_count:
             raise ValueError("start_index 不能小于上一个检查点的消息数")
@@ -319,14 +320,16 @@ class SummaryStrategy(BaseMemoryStrategy):
                 new_messages, start_index=previous_summary.message_count + 1
             )
             prompt = (
+                f"用户提供的系统消息：{system_messages}\n"
+                f"请生成包含所有对话历史总结的新累积摘要，尽量保留与系统消息相关的摘要（不超过{self.summary_max_tokens}个字符）。"
                 f"之前的累积摘要（包含前{previous_summary.message_count}条消息）：{base_summary}\n"
                 f"新增的对话内容（第{previous_summary.message_count + 1}到{end_index}条）：{new_text}\n"
-                f"请生成包含所有内容的新累积摘要（不超过{self.summary_max_tokens}个字符）。"
             )
         else:
             conversation_text = self._format_messages(to_summarise[:end_index])
             prompt = (
-                f"请将以下对话历史总结成摘要（不超过{self.summary_max_tokens}个字符）：\n"
+                f"用户提供的系统消息：{system_messages}\n"
+                f"请将以下对话历史总结成摘要，尽量保留与系统消息相关的摘要（不超过{self.summary_max_tokens}个字符）：\n"
                 f"{conversation_text}"
             )
 
@@ -379,6 +382,7 @@ class SummaryStrategy(BaseMemoryStrategy):
                 start_index=start_index,
                 end_index=current_count,
                 previous_summary=last_checkpoint,
+                system_messages=system_messages
             )
             self._checkpoints[current_count] = checkpoint
             summary_checkpoint = checkpoint
