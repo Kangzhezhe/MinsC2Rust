@@ -28,7 +28,7 @@ def prepare_fix_workspace() -> Path:
     if workspace.exists():
         shutil.rmtree(workspace)
 
-    source_project = REPO_ROOT / "benchmarks" /"c-algorithm"
+    source_project = REPO_ROOT / "llm/demo/c-algorithm"
     # source_project = REPO_ROOT / "pylspclient/tests/test_rust_workspace"
     if not source_project.exists():
         msg = f"源项目不存在: {source_project}"
@@ -126,6 +126,26 @@ def demonstrate_errors(agent: SWEAgent, max_rounds: int = 5) -> None:
     print(response.get("tool_calls", []))
     print(response["final_response"])
 
+def demonstrate_errors_fix(agent: SWEAgent, max_rounds: int = 5) -> None:
+    task_description = textwrap.dedent(
+        f"""
+        帮我修改一下所有的c语言代码编译错误
+        """
+    ).strip()
+
+    response = agent.run_task(
+        task_description,
+        acceptance_criteria=[
+            "列出所有编译错误",
+            "用search_replace工具修改部分代码片段的方式修复编译错误",
+            "修改完之后再次确认，确保所有代码可以编译通过",
+        ],
+    )
+
+    print("\n代理回复:")
+    print(response.get("tool_calls", []))
+    print(response["final_response"])
+
 def demonstrate_symbol_rust(agent: SWEAgent, max_rounds: int = 5) -> None:
     task_description = textwrap.dedent(
         f"""
@@ -169,7 +189,8 @@ def main() -> None:
     # demonstrate_compile(agent)
     # demonstrate_symbol(agent)
     # demonstrate_symbol_rust(agent)
-    demonstrate_errors(agent)
+    # demonstrate_errors(agent)
+    demonstrate_errors_fix(agent)
 
     agent.close()
 

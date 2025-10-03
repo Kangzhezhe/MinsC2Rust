@@ -708,11 +708,12 @@ class SWEFileSystemTools:
         file_path: str,
         old_string: str,
         new_string: str,
+        replace_all: bool = False,
     ) -> Dict[str, Any]:
-        """在指定文件中执行一次唯一的字符串替换。
+        """在指定文件中执行字符串替换。
 
-        要求调用方提供足够长的上下文确保 ``old_string`` 在文件内只出现一次，
-        否则会抛出 ``SWEAgentToolError``；如果成功，将替换首个匹配并写回原文件。
+        要求调用方提供足够长的上下文确保 ``old_string`` 在文件内至少出现一次。
+        默认仅替换唯一匹配；若设置 ``replace_all=True``，则替换文件中的全部匹配项。
         """
         if not old_string:
             raise SWEAgentToolError("old_string 不能为空")
@@ -731,10 +732,16 @@ class SWEFileSystemTools:
         occurrences = content.count(old_string)
         if occurrences == 0:
             raise SWEAgentToolError("未找到 old_string 对应内容，请检查上下文是否精确匹配")
-        if occurrences > 1:
-            raise SWEAgentToolError("old_string 在文件中出现超过一次，请提供更精确的上下文以确保唯一性")
+        if not replace_all and occurrences > 1:
+            raise SWEAgentToolError(
+                "old_string 在文件中出现超过一次，请提供更精确的上下文或使用 replace_all=True"
+            )
 
-        updated = content.replace(old_string, new_string, 1)
+        updated = (
+            content.replace(old_string, new_string)
+            if replace_all
+            else content.replace(old_string, new_string, 1)
+        )
 
         try:
             target.write_text(updated, encoding=self.encoding)
@@ -744,7 +751,7 @@ class SWEFileSystemTools:
         return {
             "tool": "search_replace",
             "path": self._relative_to_root(target),
-            "replacements": 1,
+            "replacements": occurrences if replace_all else 1,
         }
 
 
@@ -825,19 +832,20 @@ class SWEFileSystemTools:
             - 在 `code_edit` 中提供完整编辑内容，支持两种写法：
 
             1. **完整重写**：提供目标文件的全部内容。文件会被按给出的文本直接创建或覆盖。
-            2. **片段编辑**：尽量减少未修改文本，并使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。请提供足够的上下文以便唯一定位每段修改，若无法匹配将抛出错误并提示补充上下文或改用 diff。
+            2. **片段编辑**：尽量减少未修改文本，并使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。请提供足够的上下文以便唯一定位每段修改，若无法匹配将抛出错误并提示补充上下文。
 
             - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
             - 修改同一文件应集中在一次 `edit_file` 调用中；如需编辑多个文件，请并行发起多次调用，每次对应一个文件。
             - `target_file` 建议使用工作区内的相对路径，也支持绝对路径（会保持原值）。
             例如： 只修改文件中的main函数片段
 #include <stdio.h>
-// ... existing code ...
 int main() {
+// ... existing code ...
     printf("Hi!\\n");
     return 0;
-}
 // ... existing code ...
+}
+int func(){}
 """
         if not code_edit or not code_edit.strip():
             raise SWEAgentToolError("code_edit 不能为空")
@@ -1024,6 +1032,7 @@ class _LspSession:
     language: str
     language_id: LanguageIdentifier
     opened_documents: Dict[Path, int] = field(default_factory=dict)
+    document_mtimes: Dict[Path, int] = field(default_factory=dict)
     diagnostics: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     diagnostic_events: Dict[str, threading.Event] = field(default_factory=dict)
     diagnostics_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -1134,11 +1143,12 @@ class SWELspTools:
 
         self._sessions: Dict[str, _LspSession] = {}
         self._sessions_lock = threading.RLock()
-        self._file_lines_cache: Dict[Path, List[str]] = {}
-        self._document_text_cache: Dict[Path, str] = {}
         self._symbol_presence_cache: Dict[Tuple[str, str], bool] = {}
         self._language_sources_cache: Dict[str, bool] = {}
         self._compile_commands_dir: Optional[Path] = None
+        self._file_cache_lock = threading.RLock()
+        self._document_cache: Dict[Path, Tuple[int, str]] = {}
+        self._file_lines_cache: Dict[Path, Tuple[int, Tuple[str, ...]]] = {}
 
         atexit.register(self.close)
 
@@ -1209,6 +1219,68 @@ class SWELspTools:
         if not self._is_within_root(resolved):
             raise SWEAgentToolError("路径越界：禁止访问工作目录之外的文件")
         return resolved
+
+    def _expand_file_paths(self, raw_paths: Sequence[str]) -> Tuple[List[Path], List[str]]:
+        resolved_paths: List[Path] = []
+        warnings: List[str] = []
+        seen: Set[Path] = set()
+
+        for raw_path in raw_paths:
+            if not raw_path:
+                warnings.append("空路径已忽略")
+                continue
+
+            has_glob = any(token in raw_path for token in "*?[")
+            if has_glob:
+                pattern_path = Path(raw_path)
+                if pattern_path.is_absolute():
+                    try:
+                        rel_pattern = pattern_path.relative_to(self.workspace_root).as_posix()
+                    except ValueError:
+                        warnings.append(f"{raw_path}: 路径越界，已忽略")
+                        continue
+                    pattern = rel_pattern
+                else:
+                    pattern = raw_path
+
+                matches = sorted(self.workspace_root.glob(pattern))
+                matched_files = [match for match in matches if match.is_file()]
+                if not matched_files:
+                    warnings.append(f"{raw_path}: 未匹配到任何文件")
+                    continue
+
+                for match in matched_files:
+                    try:
+                        resolved = match.resolve(strict=False)
+                    except OSError:
+                        warnings.append(f"{raw_path}: 无法解析匹配路径 {match}")
+                        continue
+                    if not self._is_within_root(resolved):
+                        warnings.append(f"{raw_path}: 匹配路径越界 {match}")
+                        continue
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    resolved_paths.append(resolved)
+                continue
+
+            try:
+                resolved = self._resolve_path(raw_path)
+            except SWEAgentToolError as exc:
+                warnings.append(str(exc))
+                continue
+
+            if resolved.is_dir():
+                warnings.append(f"{self._relative_to_root(resolved)}: 当前仅支持文件路径")
+                continue
+
+            if resolved in seen:
+                continue
+
+            seen.add(resolved)
+            resolved_paths.append(resolved)
+
+        return resolved_paths, warnings
 
     def _build_path_filter(
         self,
@@ -1362,27 +1434,59 @@ class SWELspTools:
         path = Path(unquote(parsed.path)).resolve()
         return path
 
-    def _get_document_text(self, path: Path) -> str:
-        cached = self._document_text_cache.get(path)
-        if cached is not None:
-            return cached
+    def _get_document_state(self, path: Path) -> Tuple[str, int]:
+        try:
+            initial_stat = path.stat()
+        except OSError as exc:
+            raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
+
+        initial_mtime_ns = getattr(initial_stat, "st_mtime_ns", int(initial_stat.st_mtime * 1_000_000_000))
+
+        with self._file_cache_lock:
+            cached = self._document_cache.get(path)
+            if cached is not None and cached[0] == initial_mtime_ns:
+                return cached[1], initial_mtime_ns
+
         try:
             text = path.read_text(encoding=self.encoding)
         except OSError as exc:
             raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
-        self._document_text_cache[path] = text
+
+        try:
+            final_stat = path.stat()
+            final_mtime_ns = getattr(final_stat, "st_mtime_ns", int(final_stat.st_mtime * 1_000_000_000))
+        except OSError:
+            final_mtime_ns = initial_mtime_ns
+
+        if final_mtime_ns != initial_mtime_ns:
+            with self._file_cache_lock:
+                cached = self._document_cache.get(path)
+                if cached is not None and cached[0] == final_mtime_ns:
+                    return cached[1], final_mtime_ns
+
+        with self._file_cache_lock:
+            self._document_cache[path] = (final_mtime_ns, text)
+            self._file_lines_cache.pop(path, None)
+
+        return text, final_mtime_ns
+
+    def _get_document_text(self, path: Path) -> str:
+        text, _mtime_ns = self._get_document_state(path)
         return text
 
     def _get_file_lines(self, path: Path) -> List[str]:
-        cached = self._file_lines_cache.get(path)
-        if cached is not None:
-            return cached
-        try:
-            lines = path.read_text(encoding=self.encoding).splitlines(keepends=True)
-        except OSError as exc:
-            raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
-        self._file_lines_cache[path] = lines
-        return lines
+        text, mtime_ns = self._get_document_state(path)
+
+        with self._file_cache_lock:
+            cached = self._file_lines_cache.get(path)
+            if cached is not None and cached[0] == mtime_ns:
+                return list(cached[1])
+
+        lines_tuple = tuple(text.splitlines(keepends=True))
+        with self._file_cache_lock:
+            self._file_lines_cache[path] = (mtime_ns, lines_tuple)
+
+        return list(lines_tuple)
 
     def _extract_snippet(
         self,
@@ -1612,27 +1716,57 @@ class SWELspTools:
     # ------------------------------------------------------------------
     # 文档管理
     # ------------------------------------------------------------------
-    def _ensure_document_open(self, session: _LspSession, path: Path, *, uri: Optional[str] = None) -> str:
-        text = self._get_document_text(path)
-        document_uri = uri or path.as_uri()
+    def _close_document(self, session: _LspSession, path: Path, uri: str) -> None:
         if path not in session.opened_documents:
-            with session.diagnostics_lock:
-                session.diagnostics.pop(document_uri, None)
-                event = session.diagnostic_events.get(document_uri)
-                if event is None:
-                    session.diagnostic_events[document_uri] = threading.Event()
-                else:
-                    event.clear()
+            return
 
-            session.client.didOpen(
-                TextDocumentItem(
-                    uri=document_uri,
-                    languageId=session.language_id,
-                    version=1,
-                    text=text,
-                )
+        with suppress(Exception):
+            session.client.didClose(TextDocumentIdentifier(uri=uri))
+
+        session.opened_documents.pop(path, None)
+        session.document_mtimes.pop(path, None)
+        with session.diagnostics_lock:
+            session.diagnostics.pop(uri, None)
+            event = session.diagnostic_events.get(uri)
+            if event is not None:
+                event.clear()
+
+    def _ensure_document_open(self, session: _LspSession, path: Path, *, uri: Optional[str] = None) -> str:
+        text, mtime_ns = self._get_document_state(path)
+        document_uri = uri or path.as_uri()
+
+        existing_version = session.opened_documents.get(path)
+        previous_mtime = session.document_mtimes.get(path)
+        needs_reopen = existing_version is None or previous_mtime != mtime_ns
+        base_version = existing_version or 0
+
+        if needs_reopen and existing_version is not None:
+            self._close_document(session, path, document_uri)
+
+        if not needs_reopen and existing_version is not None:
+            with session.diagnostics_lock:
+                session.diagnostic_events.setdefault(document_uri, threading.Event())
+            return text
+
+        with session.diagnostics_lock:
+            session.diagnostics.pop(document_uri, None)
+            event = session.diagnostic_events.get(document_uri)
+            if event is None:
+                session.diagnostic_events[document_uri] = threading.Event()
+            else:
+                event.clear()
+
+        version = base_version + 1
+        session.client.didOpen(
+            TextDocumentItem(
+                uri=document_uri,
+                languageId=session.language_id,
+                version=version,
+                text=text,
             )
-            session.opened_documents[path] = 1
+        )
+        session.opened_documents[path] = version
+        session.document_mtimes[path] = mtime_ns
         return text
 
     def _wait_for_diagnostics(
@@ -2053,7 +2187,7 @@ class SWELspTools:
     def lsp_get_errors(
         self,
         filePaths: List[str],
-        min_severity: Optional[Union[str, int]] = None,
+        min_severity: Optional[Union[str, int]] = 1,
     ) -> Dict[str, Any]:
         """
         获取指定文件的诊断信息。min_severity 可选，指定返回的最小诊断级别。支持: error, warning, information, hint 或 1-4"
@@ -2070,23 +2204,26 @@ class SWELspTools:
 
         results: List[Dict[str, Any]] = []
         warnings: List[str] = []
-        seen: Set[str] = set()
 
-        for raw_path in filePaths:
-            try:
-                resolved = self._resolve_path(raw_path)
-            except SWEAgentToolError as exc:
-                warnings.append(str(exc))
-                continue
+        resolved_paths, expand_warnings = self._expand_file_paths(filePaths)
+        warnings.extend(expand_warnings)
 
-            if resolved.is_dir():
-                warnings.append(f"{self._relative_to_root(resolved)}: 当前仅支持文件路径")
-                continue
-
+        if not resolved_paths:
+            response: Dict[str, Any] = {
+                "tool": "lsp_get_errors",
+                "files": results,
+            }
+            if severity_threshold is not None:
+                response["min_severity"] = {
+                    "value": severity_threshold,
+                    "label": severity_label,
+                }
+            if warnings:
+                response["warnings"] = warnings
+            return response
+        
+        for resolved in resolved_paths:
             rel_path = self._relative_to_root(resolved)
-            if rel_path in seen:
-                continue
-            seen.add(rel_path)
 
             language = self._detect_language_for_path(resolved)
             if not language:
@@ -2140,13 +2277,14 @@ class SWELspTools:
                     }
                 )
 
-            results.append(
-                {
-                    "file": rel_path,
-                    "language": language,
-                    "diagnostics": entries,
-                }
-            )
+            if len(entries) > 0:
+                results.append(
+                    {
+                        "file": rel_path,
+                        "language": language,
+                        "diagnostics": entries,
+                    }
+                )
 
         response: Dict[str, Any] = {
             "tool": "lsp_get_errors",
@@ -2235,12 +2373,12 @@ class SWEAgent(Agent):
             self.toolset.write_file,
             # self.toolset.append_file,
             self.toolset.grep_search,
-            # self.toolset.search_replace,
-            self.toolset.run_command,
+            self.toolset.search_replace,
+            # self.toolset.run_command,
             # self.toolset.run_tests,
             # self.toolset.apply_patch,
-            self.toolset.edit_file,
-            self.toolset.run_tools_parallel,
+            # self.toolset.edit_file,
+            # self.toolset.run_tools_parallel,
             # self.toolset.list_symbol_usages,
             # self.toolset.list_symbol_definitions,
         ]

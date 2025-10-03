@@ -1,0 +1,392 @@
+[
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/arraylist.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/arraylist.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/arraylist.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/avl-tree.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/avl-tree.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/avl-tree.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/binary-heap.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/binary-heap.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/binary-heap.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/binomial-heap.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/binomial-heap.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/binomial-heap.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/bloom-filter.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/bloom-filter.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/bloom-filter.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/compare-int.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/compare-int.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/compare-int.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/compare-pointer.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/compare-pointer.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/compare-pointer.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/compare-string.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/compare-string.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/compare-string.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/hash-int.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-int.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-int.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/hash-pointer.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-pointer.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-pointer.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/hash-string.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-string.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-string.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/hash-table.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-table.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/hash-table.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/list.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/list.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/list.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/queue.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/queue.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/queue.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/rb-tree.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/rb-tree.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/rb-tree.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/set.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/set.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/set.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/slist.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/slist.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/slist.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/sortedarray.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/sortedarray.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/sortedarray.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/trie.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/trie.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/trie.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/tinyexpr.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/tinyexpr.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/tinyexpr.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/adt.dir/src/utf8-decoder.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/utf8-decoder.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src/utf8-decoder.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-utf8-decoder.dir/test/test-utf8-decoder.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-utf8-decoder.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-utf8-decoder.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-utf8-decoder.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-utf8-decoder.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-alloc-testing.dir/test/test-alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-alloc-testing.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-alloc-testing.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-arraylist.dir/test/test-arraylist.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-arraylist.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-arraylist.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-arraylist.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-arraylist.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-avl-tree.dir/test/test-avl-tree.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-avl-tree.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-avl-tree.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-avl-tree.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-avl-tree.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-binary-heap.dir/test/test-binary-heap.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-binary-heap.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-binary-heap.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-binary-heap.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-binary-heap.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-binomial-heap.dir/test/test-binomial-heap.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-binomial-heap.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-binomial-heap.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-binomial-heap.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-binomial-heap.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-bloom-filter.dir/test/test-bloom-filter.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-bloom-filter.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-bloom-filter.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-bloom-filter.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-bloom-filter.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-compare-functions.dir/test/test-compare-functions.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-compare-functions.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-compare-functions.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-compare-functions.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-compare-functions.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-hash-functions.dir/test/test-hash-functions.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-hash-functions.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-hash-functions.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-hash-functions.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-hash-functions.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-hash-table.dir/test/test-hash-table.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-hash-table.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-hash-table.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-hash-table.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-hash-table.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-list.dir/test/test-list.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-list.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-list.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-list.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-list.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-queue.dir/test/test-queue.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-queue.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-queue.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-queue.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-queue.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-rb-tree.dir/test/test-rb-tree.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-rb-tree.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-rb-tree.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-rb-tree.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-rb-tree.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-set.dir/test/test-set.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-set.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-set.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-set.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-set.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-slist.dir/test/test-slist.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-slist.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-slist.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-slist.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-slist.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-sortedarray.dir/test/test-sortedarray.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-sortedarray.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-sortedarray.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-sortedarray.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-sortedarray.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-trie.dir/test/test-trie.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-trie.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-trie.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-trie.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-trie.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-tinyexpr.dir/test/test-tinyexpr.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-tinyexpr.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-tinyexpr.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-tinyexpr.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-tinyexpr.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/c++ -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-cpp.dir/test/test-cpp.cpp.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-cpp.cpp",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/test-cpp.cpp"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-cpp.dir/test/framework.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/framework.c"
+},
+{
+  "directory": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/src -I/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test  -o CMakeFiles/test-cpp.dir/test/alloc-testing.c.o -c /home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c",
+  "file": "/home/mins/MinsC2Rust/llm/demo/swe_agent_understand_workspace/test/alloc-testing.c"
+}
+]
