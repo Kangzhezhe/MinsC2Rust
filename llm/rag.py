@@ -1,7 +1,9 @@
 import os
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
+import requests
 import chromadb
 from chromadb.utils import embedding_functions
 from llm.read_file import read_file, smart_split
@@ -24,12 +26,121 @@ def get_embedding(text):
     )
     return resp.data[0].embedding
 
+
+def get_embeddings(texts, batch_size=10, max_workers=1):
+    if not texts:
+        return []
+
+    def _embed(batch):
+        resp = client.embeddings.create(
+            model=embedding_default_model,
+            input=batch,
+            dimensions=embedding_dimensions,
+            encoding_format="float"
+        )
+        return [item.embedding for item in resp.data]
+
+    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+
+    if max_workers is None or max_workers <= 1 or len(batches) == 1:
+        embeddings = []
+        for batch in batches:
+            embeddings.extend(_embed(batch))
+        return embeddings
+
+    embeddings = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_embed, batch) for batch in batches]
+        for future in futures:
+            embeddings.extend(future.result())
+    return embeddings
+
+
+def rerank_documents(query, documents, top_n=None):
+    """
+    调用 DashScope rerank 接口对检索结果进行重排。
+
+    参数:
+        query (str): 检索查询。
+        documents (List[str]): 候选文档列表（JSON字符串或纯文本）。
+        top_n (int or None): 返回前 top_n 的文档，默认全部。
+        endpoint (str or None): rerank 服务地址，默认 DashScope 官方地址。
+
+    返回:
+        List[str]: 根据相关性得分排序后的文档列表。
+    """
+    if not documents:
+        return []
+
+    api_key = os.getenv("DASHSCOPE_API_KEY") or embedding_api_key
+    endpoint = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    limit = min(top_n or len(documents), len(documents))
+
+    payload_docs = []
+    doc_texts = []
+    for idx, doc in enumerate(documents):
+        text = doc
+        if isinstance(doc, str):
+            try:
+                doc_json = json.loads(doc)
+                text = doc_json.get("content") or doc_json.get("text") or doc
+            except json.JSONDecodeError:
+                text = doc
+        payload_docs.append(text)
+        doc_texts.append(doc)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "gte-rerank-v2",
+        "input": {
+            "query": query,
+            "documents": payload_docs
+        },
+        "parameters": {
+            "return_documents": False,
+            "top_n": limit
+        }
+    }
+
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("output", {}).get("results") or data.get("results", [])
+        if not results:
+            return doc_texts[:limit]
+        # 根据返回的 index 重排
+        ordered = sorted(results, key=lambda item: item.get("relevance_score", 0), reverse=True)
+        reordered_docs = []
+        seen_indices = set()
+        for item in ordered:
+            idx = item.get("index")
+            if idx is None or idx in seen_indices or idx >= len(doc_texts):
+                continue
+            reordered_docs.append(doc_texts[idx])
+            seen_indices.add(idx)
+        # 如果接口返回的 top_n 少于请求数量，补齐原始顺序
+        if len(reordered_docs) < limit:
+            for idx, doc in enumerate(doc_texts):
+                if idx not in seen_indices and len(reordered_docs) < limit:
+                    reordered_docs.append(doc)
+        return reordered_docs
+    except Exception as exc:
+        print(f"rerank 调用失败，返回原始排序: {exc}")
+        return doc_texts[:limit]
+
 def search_knowledge_base(
         query,
         persist_dir="rag_chroma_db", 
         collection_name="rag_demo", 
-        top_k=5, 
-        meta_filter=None):
+        top_k=10, 
+        meta_filter=None,
+        use_rerank=False,
+        rerank_top_n=5,
+        ):
     """
     支持通过meta_filter字典统一过滤的知识库检索。
 
@@ -38,6 +149,8 @@ def search_knowledge_base(
         collection: Chroma collection对象
         top_k (int): 返回top_k条
         meta_filter (dict or None): 只检索满足这些元信息的分块，如 {"source_file": "...", "type": "..."}，为None则不限制
+        use_rerank (bool): 是否调用 rerank 接口对结果重排。
+        rerank_top_n (int or None): 参与重排的候选数量，默认与 top_k 相同。
 
     返回:
         List[str]: 分块内容列表
@@ -77,7 +190,18 @@ def search_knowledge_base(
         except Exception:
             if meta_filter is None:
                 filtered.append(doc)
-    return filtered[:top_k]
+    if not filtered:
+        return []
+
+    rerank_candidates = filtered[:max(top_k, rerank_top_n or top_k)]
+    if use_rerank:
+        reranked = rerank_documents(
+            query,
+            rerank_candidates,
+            top_n=rerank_top_n or len(rerank_candidates),
+        )
+        return reranked[:top_k]
+    return rerank_candidates[:top_k]
 
 
 
@@ -135,6 +259,7 @@ def build_multi_file_knowledge_base(
         collection.delete(ids=all_ids)
 
     chunk_idx = 0
+    chunks = []
     for file_item in file_list:
         # 支持字符串或字典
         if isinstance(file_item, str):
@@ -144,6 +269,9 @@ def build_multi_file_knowledge_base(
             file_path = file_item.get("file_path")
             extra_meta = {k: v for k, v in file_item.items() if k != "file_path"}
         else:
+            continue
+
+        if not file_path:
             continue
 
         content = read_file(file_path)
@@ -174,15 +302,97 @@ def build_multi_file_knowledge_base(
                 "content": piece_text,
                 "metadata": metadata
             }, ensure_ascii=False)
-            emb = get_embedding(piece_text)
-            collection.add(
-                embeddings=[emb],
-                documents=[chunk_json],
-                ids=[chunk_id]
-            )
+            chunks.append({
+                "id": chunk_id,
+                "text": piece_text,
+                "document": chunk_json
+            })
             chunk_idx += 1
+
+    if not chunks:
+        print("未找到可入库的分块")
+        return collection
+
+    embed_batch_size = 10
+    max_workers = 8
+
+    all_embeddings = get_embeddings(
+        [item["text"] for item in chunks],
+        batch_size=embed_batch_size,
+        max_workers=max_workers
+    )
+
+    for i in range(0, len(chunks), embed_batch_size):
+        batch = chunks[i:i + embed_batch_size]
+        emb_slice = all_embeddings[i:i + len(batch)]
+        collection.add(
+            embeddings=emb_slice,
+            documents=[item["document"] for item in batch],
+            ids=[item["id"] for item in batch]
+        )
     print(f"共入库 {chunk_idx} 块")
     return collection
+
+
+def build_directory_knowledge_base(
+    root_dir,
+    suffixes,
+    persist_dir="rag_chroma_db",
+    collection_name="rag_demo",
+    max_len=1000,
+    overlap=100
+):
+    """
+    递归扫描目录，筛选指定后缀文件并构建知识库。
+
+    参数:
+        root_dir (str): 需要遍历的根目录。
+        suffixes (Iterable[str] or str): 希望纳入的文件后缀列表，支持带或不带点，如 [".c", "h"].
+        persist_dir (str): Chroma本地数据库存储目录，默认"rag_chroma_db"。
+        collection_name (str): Collection名称，默认"rag_demo"。
+        max_len (int): 分块最大长度，默认1000。
+        overlap (int): 分块重叠长度，默认100。
+
+    返回:
+        collection: 构建完成的Chroma collection对象。
+    """
+    if isinstance(suffixes, str):
+        suffix_iterable = {suffixes}
+    else:
+        suffix_iterable = set(suffixes)
+
+    normalized_suffixes = {
+        s if s.startswith(".") else f".{s}"
+        for s in suffix_iterable
+    }
+
+    file_list = []
+    for current_root, _, files in os.walk(root_dir):
+        for filename in files:
+            file_ext = os.path.splitext(filename)[1]
+            if file_ext in normalized_suffixes:
+                file_path = os.path.join(current_root, filename)
+                relative_path = os.path.relpath(file_path, root_dir)
+                file_list.append({
+                    "file_path": file_path,
+                    "file_suffix": file_ext,
+                    "relative_path": relative_path
+                })
+
+    print(f"在目录 '{root_dir}' 下找到 {len(file_list)} 个匹配后缀 {sorted(normalized_suffixes)} 的文件")
+
+    if not file_list:
+        raise ValueError(
+            f"未在目录 '{root_dir}' 下找到匹配后缀 {sorted(normalized_suffixes)} 的文件"
+        )
+
+    return build_multi_file_knowledge_base(
+        file_list,
+        persist_dir=persist_dir,
+        collection_name=collection_name,
+        max_len=max_len,
+        overlap=overlap
+    )
 
 
 def show_chroma_collection(
@@ -232,18 +442,30 @@ def show_chroma_collection(
 
 def main():
 
-    file_list = [
-        {"file_path":"/home/mins/MinsC2Rust/benchmarks/c-algorithm/src/arraylist.c", "type":"c"},
-        {"file_path":"/home/mins/MinsC2Rust/benchmarks/c-algorithm/src/arraylist.h", "type":"h"},
-    ]
+    # file_list = [
+    #     {"file_path":"/home/mins/MinsC2Rust/benchmarks/c-algorithm/src/arraylist.c", "type":"c"},
+    #     {"file_path":"/home/mins/MinsC2Rust/benchmarks/c-algorithm/src/arraylist.h", "type":"h"},
+    # ]
 
-    collection = build_multi_file_knowledge_base(file_list)
+    # collection = build_multi_file_knowledge_base(file_list)
+
+    build_directory_knowledge_base(
+        root_dir="/home/mins/MinsC2Rust/benchmarks/c-algorithm",
+        suffixes=[".c", ".h"],
+        max_len=3000
+    )
 
     while True:
         query = input("请输入你的问题（exit退出）：").strip()
         if query.lower() == "exit":
             break
-        docs = search_knowledge_base(query, collection_name="rag_demo")
+        docs = search_knowledge_base(
+            query,
+            collection_name="rag_demo",
+            top_k=10,
+            use_rerank=True,
+            rerank_top_n=3
+        )
         print("\n【检索到的知识块】")
         for i, doc in enumerate(docs):
             print(f"Top{i+1}:\n{doc}\n------")
