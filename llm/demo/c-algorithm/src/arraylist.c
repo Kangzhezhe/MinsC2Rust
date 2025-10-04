@@ -86,7 +86,7 @@ static int arraylist_enlarge(ArrayList *arraylist)
 
 	/* Reallocate the array to the new size */
 
-	data = realloc(arraylist->data, sizeof(ArrayLisalue) * newsize);
+	data = realloc(arraylist->data, sizeof(ArrayListValue) * newsize);
 
 	if (data == NULL) {
 		return 0;

@@ -40,8 +40,8 @@ def test_llm_tool_caller_invalid_tool():
     caller = LLMToolCaller([add])
     llm_output = '{"tool_call": {"name": "not_exist", "args": {"a": 1, "b": 2}}}'
     name, result = caller.call(llm_output)
-    assert name is None
-    assert result is None
+    assert name == "not_exist"
+    assert result == "未注册的工具: not_exist"
 
 def test_llm_tool_caller_args_as_str():
     def add(a: int, b: int): return a + b

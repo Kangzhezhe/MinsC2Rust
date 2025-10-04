@@ -309,7 +309,8 @@ class CProjectReconstructor:
         for func in functions:
             if 'start_line' in func:
                 # 使用函数声明或定义
-                content = func.get('full_definition') or func.get('full_declaration', '')
+                # content = func.get('full_definition') or func.get('full_declaration', '')
+                content = func.get('signature', '')
                 if content:
                     all_elements.append({
                         'type': 'function',

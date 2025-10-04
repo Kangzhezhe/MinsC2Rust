@@ -18,7 +18,7 @@ def strip_think_tags(text: str) -> str:
     # 删除任何残留的孤立 think 标签
     cleaned = re.sub(r'(?i)</?think\s*/?>', '', cleaned)
     # 去除前后及多余空白行
-    return "\n".join(line for line in (l.rstrip() for l in cleaned.splitlines()) if line).strip()
+    return cleaned
 
 
 def _schema_to_example(schema: dict, model_cls: type = None):
@@ -363,7 +363,7 @@ class TemplateParser:
                     next_pos = remain.find(seg_end)
                     if next_pos == -1:
                         raise ValueError(f"输出格式错误，缺少 '{seg_end}'")
-                    value = remain[:next_pos].strip()
+                    value = remain[:next_pos]
                     idx += next_pos
             else:
                 # 自动识别类型结尾
@@ -616,7 +616,18 @@ class TemplateParser:
             for model_name, model_cls in self.model_map.items():
                 if issubclass(model_cls, BaseModel):
                     schema = model_cls.model_json_schema()
-                    instructions += f"{model_name} 的 schema:\n{json.dumps(schema, ensure_ascii=False)}\n"
+
+                    def _strip_titles(node: Any) -> Any:
+                        if isinstance(node, dict):
+                            node.pop("title", None)
+                            for key, value in list(node.items()):
+                                node[key] = _strip_titles(value)
+                        elif isinstance(node, list):
+                            return [_strip_titles(item) for item in node]
+                        return node
+
+                    cleaned_schema = _strip_titles(schema)
+                    instructions += f"{model_name} 的 schema:\n{json.dumps(cleaned_schema, ensure_ascii=False)}\n"
         return instructions
 
 

@@ -1,9 +1,10 @@
 import inspect
 import json
+from typing import Type
 from openai import OpenAI
 from llm.ENV import llm_url, llm_api_key, llm_default_model
 from llm.template_parser.template_parser import TemplateParser
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, ConfigDict, create_model
 
 tool_registry = {}
 
@@ -20,7 +21,8 @@ def infer_param_model(func):
             fields[name] = (ann, param.default)
         else:
             fields[name] = (ann, ...)
-    model = create_model(f"{func.__name__.capitalize()}Params", **fields)
+    # model = create_model(f"{func.__name__.capitalize()}Params", **fields)
+    model = create_model(f"{func.__name__}", **fields)
     return model
 
 def register_tool(name=None):
@@ -81,10 +83,13 @@ class LLMToolCaller:
         for func in tools:
             tool_name = func.__name__
             param_model = infer_param_model(func)
+            doc = inspect.getdoc(func) or ""
+            if doc:
+                self._attach_model_description(param_model, doc)
             self.tool_registry[tool_name] = {
                 "func": func,
                 "param_model": param_model,
-                "doc": inspect.getdoc(func) or "",
+                "doc": doc,
             }
         self.param_models = {name: info["param_model"] for name, info in self.tool_registry.items()}
         self.template, self.example = build_tool_template(list(self.param_models.keys()), self.param_models)
@@ -96,14 +101,23 @@ class LLMToolCaller:
             + "注意：一次只允许调用一个工具，如果回答中包含了多个工具调用，只会执行第一个\n"
             + self.parser.get_format_instructions()
             + "注意：当需要调用工具时，严格按上面的模板原样返回（仅name与args为变量），其他内容为字符串，禁止任何格式化或装饰：\n"
-            + "\n不同工具的args示例：\n" + self.example
         )
-        tool_docs = []
-        for name, info in self.tool_registry.items():
-            doc = info["doc"].replace("\n", "\n    ") if info["doc"] else "(无)"
-            tool_docs.append(f"- {name}: {doc}")
-        if tool_docs:
-            self.instructions += "\n\n工具说明：\n" + "\n".join(tool_docs)
+    @staticmethod
+    def _attach_model_description(model: Type[BaseModel], description: str) -> None:
+        if not description:
+            return
+
+        existing_extra = dict(getattr(model.model_config, "json_schema_extra", {}) or {})
+        if existing_extra.get("description") == description:
+            return
+
+        existing_extra["description"] = description
+
+        base_config = dict(model.model_config)
+        base_config["json_schema_extra"] = existing_extra
+
+        model.model_config = ConfigDict(**base_config)
+        model.model_rebuild(force=True)
 
     def _normalize_toolcall_output(self, text: str) -> str:
         t = text.strip()
@@ -172,6 +186,8 @@ class LLMToolCaller:
                 func = self.tool_registry[tool_name]["func"]
                 # print("调用工具:", tool_name, "参数:", params,"结果:", func(**params.model_dump()))
                 return tool_name, func(**params.model_dump())
+            else:
+                return tool_name, f"未注册的工具: {tool_name}"
         except Exception as e:
             print("工具解析或调用失败:", e)
             return tool_name, f"工具解析或调用失败: {e}"

@@ -496,8 +496,9 @@ class Agent:
         context_array=[]
         context_array.append({"role": "system", "content": f"{current_prompt}"})
         for i, call in enumerate(tool_calls, 1):
-            # context += f"{i}. 调用工具 {call}\n"
             context_array.append(f"{i}. 调用工具 {call}\n")
+
+            # context += f"{i}. 调用工具 {call}\n"
             # context += f"{i}. 调用工具 {call['name']}\n"
             # context += f"   参数: {call['args']}\n"
             # context += f"   结果: {call['result']}\n"
@@ -507,7 +508,7 @@ class Agent:
             item if isinstance(item, str) else json.dumps(item['content'], ensure_ascii=False)
             for item in context_array
         ]
-        context+= "".join(context_array)
+        context+= "".join(context_array[1:])
         
         return context
     

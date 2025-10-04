@@ -31,20 +31,20 @@ except ImportError:
 
 class CustomCallbackHandler(BaseCallbackHandler):
     def on_llm_start(self, serialized, prompts, **kwargs):
-        print("\n====== LLM 开始 ======")
+        print(f"\n====== LLM 开始 ====== :{len(''.join(prompts))} bytes")
         print(f"提示词：{prompts}")
 
     def on_llm_end(self, response, **kwargs):
-        print("\n====== LLM 结束 ======")
+        print(f"\n====== LLM 结束 ====== :{len(response.generations[0][0].text)} bytes")
         print(f"输出：{response.generations[0][0].text}")
 
 class LLM:
     def __init__(
         self,
-        model=None,
-        temperature=0.3,
-        history_len=0,
-        logger=False,
+        model: Optional[Union[str, ChatOpenAI]] = None,
+        temperature: float = 0.3,
+        history_len: int = 0,
+        logger: bool = False,
         mcp_configs=None,
         memory_strategy: Optional[Union[str, Dict[str, Any], BaseMemoryStrategy]] = None,
         memory_options: Optional[Dict[str, Any]] = None,
@@ -53,18 +53,28 @@ class LLM:
         初始化LLM类，支持传统工具调用和MCP工具调用
         
         Args:
-            model: 模型名称
+            model: 模型名称或已经初始化的 ChatOpenAI 实例
             temperature: 温度参数
             history_len: 历史记录长度
             logger: 是否启用日志
             mcp_configs: MCP服务器配置列表
         """
-        self.llm = ChatOpenAI(
-            base_url=llm_url,
-            api_key=llm_api_key,
-            model=model or llm_default_model,
-            temperature=temperature,
-        )
+        if isinstance(model, ChatOpenAI) or (
+            model is not None
+            and hasattr(model, "invoke")
+            and callable(getattr(model, "invoke", None))
+        ):
+            self.llm = model  # type: ignore[assignment]
+            resolved_model_name = getattr(model, "model_name", None)
+        else:
+            resolved_model_name = model or llm_default_model
+            self.llm = ChatOpenAI(
+                base_url=llm_url,
+                api_key=llm_api_key,
+                model=resolved_model_name,
+                temperature=temperature,
+            )
+        self.model_name = resolved_model_name
         self.file_list = None
         self.history = []
         self.history_len = history_len
@@ -219,14 +229,17 @@ class LLM:
         system_parts = ["你是一个智能助手，请根据用户要求提供准确、有用的回答。"]
         
         if parser:
-            system_parts.append(f"最终输出格式要求：{parser.get_format_instructions()}")
+            system_parts.append(f"最终输出格式要求：<FINAL_OUTPUT>\n{parser.get_format_instructions()}\n\n\n</FINAL_OUTPUT>")
         
         if caller:
-            system_parts.append(f"工具使用说明：{caller.get_instructions()}")
+            system_parts.append(f"工具使用说明：<TOOL_USAGE>\n{caller.get_instructions()}\n</TOOL_USAGE>")
         
         if docs:
-            system_parts.append("你是知识库问答助手。请根据提供的知识内容回答用户问题。")
-        
+            context_text = "\n\n".join(
+                doc["content"] if isinstance(doc, dict) and "content" in doc else doc for doc in docs
+            )
+            system_parts.append(f"你是知识库问答助手。请根据提供的知识内容回答用户问题。<DOCUMENTATIONS>\n{context_text}\n</DOCUMENTATIONS>")
+
         messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
         
         # 历史对话
@@ -240,11 +253,6 @@ class LLM:
         
         # 当前用户消息
         user_content = prompt
-        if docs:
-            context = "\n\n".join(
-                doc["content"] if isinstance(doc, dict) and "content" in doc else doc for doc in docs
-            )
-            user_content = f"知识内容：\n{context}\n\n用户问题：{prompt}"
         
         messages.append({"role": "user", "content": user_content})
         

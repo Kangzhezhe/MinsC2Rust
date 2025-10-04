@@ -1,5 +1,7 @@
+import asyncio
 import atexit
 import json
+import difflib
 import os
 import re
 import shlex
@@ -15,12 +17,18 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 from contextlib import suppress
 from urllib.parse import unquote, urlparse
+from langchain_openai import ChatOpenAI
 
 from pydantic import BaseModel, Field, RootModel, ValidationError
+
+from llm.template_parser.template_parser import TemplateParser
+from llm.ENV import llm_default_model
 
 from .agent import Agent
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .llm import LLM
 
 from analyzer.analyzer import Analyzer
 
@@ -39,6 +47,9 @@ from pylspclient.lsp_pydantic_strcuts import (
     TextDocumentIdentifier,
     TextDocumentItem,
 )
+
+from .utils.call_snippet import apply_code_edit
+# from .utils.code_merge import edit_snippet
 
 class ToolOperation(BaseModel):
     tool: str = Field(description='要调用的工具方法名')
@@ -74,12 +85,39 @@ class SWEFileSystemTools:
     _workspace_root: Path = field(init=False, repr=False)
     _symbol_analyzer: Optional[Analyzer] = field(default=None, init=False, repr=False)
     _analyzer_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _llm: Optional["LLM"] = field(default=None, init=False, repr=False)
+    _llm_cache: Dict[str, "LLM"] = field(default_factory=dict, init=False, repr=False)
+    _last_read_context: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False)
+    _last_edit_attempts: Dict[str, Dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    placeholder_merge_model: Optional[str] = None
 
     def __post_init__(self) -> None:
         root = Path(self.workspace_root).expanduser().resolve()
         if not root.exists() or not root.is_dir():
             raise ValueError(f"工作目录不存在或不是文件夹: {self.workspace_root}")
         self._workspace_root = root
+
+        self.bind_llm(LLM(model=ChatOpenAI(
+                base_url='http://zy.dwz.ink:15499/v1',
+                api_key= 'sk-swycvBanfNoMRfJ74958144a8d5944BcAfD025910f059aCb',
+                # model='qwen32b',
+                model='Qwen3-Coder',
+                temperature=0,
+            ),logger=True))
+        
+        # self.bind_llm(LLM(model=ChatOpenAI(
+        #         base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
+        #         api_key= 'sk-438a9f4316fe4856a96d2c529de0404f',
+        #         model='qwen2.5-7b-instruct-1m',
+        #         temperature=0,
+        #     )))
+
+        if self.placeholder_merge_model is None:
+            self.placeholder_merge_model = llm_default_model
+
+    def bind_llm(self, llm: Optional["LLM"]) -> None:
+        """注入用于占位符展开的 LLM 实例，可在 Agent 初始化后绑定。"""
+        self._llm = llm
 
     # ------------------------------------------------------------------
     # 基础路径处理
@@ -315,17 +353,8 @@ class SWEFileSystemTools:
 
     def file_search(self, query: str, max_results: int = 20) -> Dict[str, Any]:
         """按照 glob 模式搜索工作区内的文件或目录。
-
-        使用示例::
-
-            # 搜索所有 Python 源文件（最多返回 20 条）
-            toolset.file_search("**/*.py")
-
-            # 搜索 src 目录下的 C 文件，最多返回 10 条
-            toolset.file_search("src/**/*.c", max_results=10)
-
         :param query: 需要匹配的 glob 模式，例如 ``src/**/*.py``。
-        :param max_results: 返回的最大结果数，默认 20，必须为正数。
+        :param max_results: 返回的最大结果数。
         """
 
         if not query or not query.strip():
@@ -364,15 +393,11 @@ class SWEFileSystemTools:
         isRegexp: bool = False,
         max_results: int = 20,
     ) -> Dict[str, Any]:
-        """在工作区内执行快速文本搜索。
+        """在工作区内执行快速文本搜索（精确或模糊）。
 
         使用示例:
-
-            # 精确查找 README 中的 "TODO"
-            toolset.grep_search("TODO", includePattern="README.md")
-
             # 在 C 源文件中用正则匹配函数定义（最多 20 条结果）
-            toolset.grep_search(r"^int\\s+main", includePattern="src/**/*.c", isRegexp=True)
+            grep_search(r"^int\\s+main", includePattern="src/**/*.c", isRegexp=True)
 
         :param query: 要搜索的文本或正则表达式，不能为空。
         :param includePattern: 可选的 glob 模式，仅在匹配的文件中搜索；默认遍历全部文件。
@@ -620,13 +645,14 @@ class SWEFileSystemTools:
         start_line: int,
         end_line: int,
         max_bytes: int = 64_000,
+        info: str = ""
     ) -> Dict[str, Any]:
-        """读取文件内容，可选行范围截取。
+        """读取文件内容，可选行范围截取。在使用edit_file前，必须先读取文件内容。
 
         返回信息包含：
         - ``path``：相对工作区根目录的路径；
         - ``content``：读取到的文本内容（可能被截断）；
-        - ``start_line`` / ``end_line``：必须提供当前片段在文件中的行号范围。行以1开始计数。
+        - ``start_line`` / ``end_line``：必须提供当前片段在文件中的行号范围。行以1开始计数。注意：为了提供充足的上下文，请求的行范围应包含目标编辑位置的前后若干行。
         """
         target = self._resolve_path(path)
         if target.is_dir():
@@ -672,8 +698,20 @@ class SWEFileSystemTools:
                     content = visible_text + "\n...（内容已截断）"
         except OSError as exc:
             raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
+        relative_path = self._relative_to_root(target)
+
+        self._last_read_context = {
+            "path": target,
+            "relative": relative_path,
+            "start_line": snippet_start,
+            "end_line": snippet_end,
+            "text": visible_text,
+            "truncated": truncated,
+        }
+
         return {
-            "path": self._relative_to_root(target),
+            "info": info,
+            "path": relative_path,
             "content": content,
             "start_line": snippet_start,
             "end_line": snippet_end,
@@ -786,134 +824,768 @@ class SWEFileSystemTools:
         """执行测试命令，默认使用pytest。"""
         return self.run_command(command, timeout=timeout)
 
-    def _strip_md_fences(self, text: str) -> str:
-        stripped = text.strip()
-        if stripped.startswith("```"):
-            first_nl = stripped.find("\n")
-            last_fence = stripped.rfind("\n```")
-            if first_nl != -1 and last_fence != -1 and last_fence > first_nl:
-                return stripped[first_nl + 1:last_fence]
-        return text
+    def _count_placeholders(self, text: str) -> int:
+        return sum(1 for line in text.splitlines() if self.PLACEHOLDER_LINE_RE.match(line.strip()))
 
-    def _split_placeholder_segments(self, text: str) -> Optional[Tuple[List[str], List[str]]]:
-        lines = text.splitlines(keepends=True)
-        segments: List[str] = []
-        tokens: List[str] = []
-        buffer: List[str] = []
-        for line in lines:
-            if self.PLACEHOLDER_LINE_RE.match(line.strip("\r\n")):
-                segments.append("".join(buffer))
-                tokens.append(line)
-                buffer = []
+    def _refine_patch_with_llm(self, instructions: str, patch_text: str, code_edit: str,context_snippet:str) -> str:
+        """使用 LLM 清理补丁内容，移除无意义的格式化改动并避免重复的修改边界。"""
+        if not patch_text.strip():
+            return patch_text
+
+        if self._llm is None:
+            return patch_text
+
+        prompt = textwrap.dedent(
+            f"""
+            你是一名补丁清理助手。
+            请依据给定的修改意图、原始补丁以及占位符编辑脚本，对补丁内容进行清理：
+
+            - 保留所有与修改意图相关的语义性修改。
+            - 删除仅涉及空白、缩进或无意义格式化的变更。
+            - 不要让同一段代码在补丁的不同位置重复出现修改边界。
+            - 输出必须保持原有的 diff 格式，注意：不要修改补丁头部的文件路径信息。
+            - 注意：`-` 行表示删除，`+` 行表示新增，` ` 行表示上下文。 如果你认为一个改动是没有必要的，遵循以下原则进行修改：
+              - 如果是没有必要的删除行（以 `-` 开头），请将其`-`改为` `，表示保留该行。
+              - 如果是新增行（以 `+` 开头， 且有`-`与其对应相邻），请将`+`行删去，将`-`改为` `，表示保留该行。
+              - 例如：
+- 原始补丁：
+```
+@@ -1,4 +1,4 @@
+-int a = 1;
++   int a = 1;
+ int b = 2;
+-
+-int c = 3;
++int c =   3;
+
+```
+- 清理后：
+```
+@@ -1,4 +1,4 @@
+ int a = 1;
+ int b = 2;
+ 
+ int c = 3;
+
+```
+
+### 原始上下文目标片段
+<CONTEXT_SNIPPET>
+{context_snippet}
+</CONTEXT_SNIPPET>
+
+### 修改意图
+<INSTRUCTIONS>
+{instructions}
+</INSTRUCTIONS>
+
+### 原始补丁
+<PATCH>
+{patch_text}
+</PATCH>
+
+### 编辑脚本
+<CODE_EDIT>
+{code_edit}
+</CODE_EDIT>
+
+请直接输出清理后的补丁
+            """
+        ).strip()
+
+        parser = TemplateParser(template="<CLEAN_PATCH>\n{clean_patch:str}\n</CLEAN_PATCH>")
+
+        try:
+            response = self._llm.call(prompt, parser=parser, use_mcp=False)
+            if not response.get("success"):
+                raise ValueError("LLM 未返回预期的 clean_patch 字段")
+        except Exception:
+            return patch_text
+
+        clean_patch = response.get("data", {}).get("clean_patch")
+        if not isinstance(clean_patch, str) or not clean_patch.strip():
+            return patch_text
+
+        return clean_patch if clean_patch.endswith("\n") else clean_patch + "\n"
+
+    @staticmethod
+    def _extract_tagged_block(payload: str, tag: str) -> Optional[str]:
+        start_token = f"<{tag}>"
+        end_token = f"</{tag}>"
+        start_idx = payload.find(start_token)
+        if start_idx == -1:
+            return None
+        start_idx += len(start_token)
+        end_idx = payload.find(end_token, start_idx)
+        if end_idx == -1:
+            return None
+        return payload[start_idx:end_idx]
+
+    def _call_llm_edit_snippet(
+        self,
+        *,
+        relative_path: str,
+        original: str,
+        edit_script: str,
+        context_snippet: str,
+        context_start_line: int,
+        context_end_line: int,
+        instructions: str
+    ) -> str:
+        try:
+            final_snippet = ""
+            final_snippet = apply_code_edit(context_snippet, edit_script)
+            print(f"context_snippet: \n{context_snippet}\nedit_script: \n{edit_script}\n, final_snippet: \n{final_snippet}\n")
+        except Exception as e:
+            raise SWEAgentToolError(f"代码编辑失败: {e}")
+        return final_snippet
+
+    def _get_llm_for_model(self, model: Optional[str] = None) -> "LLM":
+        if self._llm is None:
+            raise SWEAgentToolError("占位符解析需要可用的 LLM 实例，请先绑定 llm。")
+
+        if model is None:
+            return self._llm
+
+        normalized = str(model).strip()
+        if not normalized:
+            return self._llm
+
+        current_name = getattr(self._llm, "model_name", None)
+        if current_name and normalized == current_name:
+            return self._llm
+
+        cached = self._llm_cache.get(normalized)
+        if cached is not None:
+            return cached
+
+        try:
+            new_llm = LLM(model=normalized, logger=getattr(self._llm, "logger", False))
+        except Exception as exc:
+            raise SWEAgentToolError(f"初始化备用模型 {normalized} 失败: {exc}") from exc
+
+        self._llm_cache[normalized] = new_llm
+        return new_llm
+
+    def _call_llm_placeholder_merge(
+        self,
+        *,
+        relative_path: str,
+        original: str,
+        edit_script: str,
+        context_snippet: str,
+        context_start_line: int,
+        context_end_line: int,
+        instructions: str,
+        model: Optional[str] = None,
+    ) -> str:
+        llm = self._get_llm_for_model(model)
+
+        prompt = textwrap.dedent(
+            f"""
+            你是一名代码合并助手。
+            请使用提供的原始文件、上下文片段<CONTEXT_SNIPPET>以及包含占位符的编辑脚本<PLACEHOLDER_EDIT>，生成目标片段的最终内容。
+            特别注意：生成片段的开头与结尾字符必须与CONTEXT_SNIPPET的开头结尾完全一致。
+
+            你是一个为代码编辑器提供帮助的助手，负责将编辑内容应用到代码上并进行合并。你会收到用 <CONTEXT_SNIPPET> 标签包裹的代码和用 <PLACEHOLDER_EDIT> 标签包裹的编辑内容，你需要将编辑内容应用到代码中。
+
+例如：
+代码可以是任何类型，编辑内容的格式如下：
+// ... existing code ... 
+第一处编辑 
+// ... existing code ... 
+第二处编辑 
+// ... existing code ... 
+
+合并后的代码必须完全正确，不能有任何错误。请确保所有空白字符都被正确保留。代码中哪怕有一个小的拼写错误，都会导致编译失败或出错，从而影响用户体验。
+
+
+### 上下文目标片段
+<CONTEXT_SNIPPET>
+{context_snippet}
+</CONTEXT_SNIPPET>
+
+### 本次的修改意图
+<INSTRUCTIONS>
+{instructions}
+</INSTRUCTIONS>
+
+### 带占位符的编辑脚本
+<PLACEHOLDER_EDIT>
+{edit_script}
+</PLACEHOLDER_EDIT>
+
+            请直接输出该目标片段的最终版本，使用以下格式：
+            """
+        )
+
+        parser = TemplateParser(template="<FINAL_SNIPPET>\n{final_snippet:str}\n</FINAL_SNIPPET>")
+
+        try:
+            response = llm.call(prompt,parser=parser, use_mcp=False)
+            assert response['success'] is True , "LLM 未返回预期的 final_snippet 字段"
+        except Exception as exc:  # pragma: no cover - LLM 调用失败兜底
+            raise SWEAgentToolError(f"占位符解析的 LLM 调用失败: {exc}") from exc
+
+        final_snippet = response['data']['final_snippet']
+
+        if final_snippet is None:
+            raise SWEAgentToolError("LLM 未返回有效的最终片段。")
+
+        if not isinstance(final_snippet, str):
+            raise SWEAgentToolError("LLM 返回的最终片段格式不正确，应为字符串。")
+
+        if self.PLACEHOLDER_LINE_RE.search(final_snippet):
+            raise SWEAgentToolError("LLM 返回的内容仍包含占位符，请提供更多上下文后重试。")
+
+        return final_snippet
+    
+    def _reconcile_boundary_line(self,candidate: str, reference: str) -> str:
+        if not candidate:
+            return reference
+        if candidate.strip() == reference.strip():
+            return reference
+        reference_ending = "\r\n" if reference.endswith("\r\n") else ("\n" if reference.endswith("\n") else "")
+        if reference_ending:
+            if candidate.endswith("\r\n"):
+                pass
+            elif candidate.endswith("\n"):
+                if reference_ending == "\r\n" and not candidate.endswith("\r\n"):
+                    candidate = candidate.rstrip("\n") + reference_ending
             else:
-                buffer.append(line)
-        segments.append("".join(buffer))
-        return (segments, tokens) if tokens else None
+                candidate = candidate + reference_ending
+        return candidate
 
-    def _locate_anchor(self, haystack: str, needle: str, start: int) -> int:
-        if not needle:
-            return -1
-        direct = haystack.find(needle, start)
-        if direct != -1:
-            return direct
-        for line in needle.splitlines():
-            piece = line.strip()
-            if not piece:
-                continue
-            idx = haystack.find(piece, start)
-            if idx != -1:
-                return idx
-        return -1
+    def _summarize_diff(self, diff_text: str) -> str:
+        """清理 diff 字符串，仅保留行头与实际改动行。"""
+        if not diff_text or not diff_text.strip():
+            return "(无改动)，请提供更多上下文或者用更智能的模型重新生成补丁。"
+        keep_prefixes = ("diff --", "index ", "@@", "---", "+++")
+        cleaned: List[str] = []
+        for line in diff_text.splitlines():
+            if line.startswith(("+", "-")) or any(line.startswith(prefix) for prefix in keep_prefixes):
+                cleaned.append(line)
+        if not cleaned:
+            return "(无改动)，请提供更多上下文或者用更智能的模型重新生成补丁。"
+        return "\n".join(cleaned) + "\n" +"如果你发现生成的diff并不是你期望的更改，使用reapply 工具让更智能的模型基于同一段上下文和指令重新生成补丁。"
 
-
-    def edit_file(self, target_file: str, instructions: str, code_edit: str) -> Dict[str, Any]:
-        """用于创建或更新单个文件（请务必将 `target_file` 作为首个参数传入）。
+    def edit_file(self, target_file: str, context_start_line:int, context_end_line:int, instructions: str, code_edit: str) -> Dict[str, Any]:
+        """用于创建或更新单个文件，在调用该工具前一个工具必须一定通过 read_file 读取待修改的同一文件片段，保证查看文件的足够内容以确认文件将进行的修改。
             - `instructions` 必须由第一人称一句话组成，用来明确你打算进行的修改，如“我将更新处理函数以记录错误”。保持简短有助于下游模型正确理解意图。
-            - 在 `code_edit` 中提供完整编辑内容，支持两种写法：
-
-            1. **完整重写**：提供目标文件的全部内容。文件会被按给出的文本直接创建或覆盖。
-            2. **片段编辑**：尽量减少未修改文本，并使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。请提供足够的上下文以便唯一定位每段修改，若无法匹配将抛出错误并提示补充上下文。
+            - (required) `context_start_line` 和 `context_end_line` 必须给定确定的范围 必须大于最近几次同文件 read_file 返回的行号范围，如果该范围太大（超过500），则分多次编辑，表示当前编辑内容在文件中的位置。
+            - 在 `code_edit` 中提供完整编辑内容，写法如下：
+            - **片段编辑**：未修改文本使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。
+            - **上下文定位**：这个code_edit 会传给一个下游小模型应用更改，需要修改的文本周围请提供足够的上下文（unchanged_context :至少3行）以便唯一定位每段修改。
 
             - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
-            - 修改同一文件应集中在一次 `edit_file` 调用中；如需编辑多个文件，请并行发起多次调用，每次对应一个文件。
-            - `target_file` 建议使用工作区内的相对路径，也支持绝对路径（会保持原值）。
-            例如： 只修改文件中的main函数片段
-#include <stdio.h>
-int main() {
+            例如： 
 // ... existing code ...
-    printf("Hi!\\n");
-    return 0;
+(changed_content1)
 // ... existing code ...
-}
-int func(){}
+(changed_content2)
+// ... existing code ...
+            - **reapply**: 如果你发现生成的diff并不是期望的，让更智能的模型基于同一段上下文和指令重新生成补丁。
 """
+        MAX_EDIT_FILE_LENGTH = 500
+        if not instructions or not instructions.strip():
+            raise SWEAgentToolError("instructions 不能为空")
         if not code_edit or not code_edit.strip():
             raise SWEAgentToolError("code_edit 不能为空")
+        if context_end_line-context_start_line >= MAX_EDIT_FILE_LENGTH:
+            raise SWEAgentToolError(f"同时编辑的行区间长度 context_end_line - context_start_line 必须小于 {MAX_EDIT_FILE_LENGTH}，请分多次进行编辑")
 
-        cleaned = self._strip_md_fences(code_edit)
 
-        placeholder_data = self._split_placeholder_segments(cleaned)
+        placeholder_count = self._count_placeholders(code_edit)
         target_path = self._resolve_path(target_file, allow_nonexistent=True)
         relative = self._relative_to_root(target_path)
+        read_context = self._last_read_context
 
-        if placeholder_data:
-            segments, placeholders = placeholder_data
-            if not target_path.exists():
-                raise SWEAgentToolError("目标文件不存在，无法根据占位符合并片段")
+        if target_path.exists():
+            if not read_context or read_context.get("relative") != relative:
+                return self.read_file(
+                    path=target_file,
+                    start_line=context_start_line,
+                    end_line=context_end_line,
+                    info="在调用 edit_file 之前，请先使用 read_file 读取待修改的同一文件片段，以下是 read_file 的返回结果，请重新调用 edit_file。",
+                )
+                # raise SWEAgentToolError(
+                #     "在调用 edit_file 之前，请先使用 read_file 读取待修改的同一文件片段。"
+                # )
+            if read_context.get("truncated"):
+                raise SWEAgentToolError(
+                    "最近一次 read_file 的内容被截断，请缩小读取范围后重试。"
+                )
+        else:
+            read_context = None
+
+        if not target_path.exists():
+            raise SWEAgentToolError("目标文件不存在，无法根据占位符合并片段")
+        if read_context is None:
+            raise SWEAgentToolError("占位符编辑需要先读取目标片段，请先调用 read_file。")
+        try:
+            original = target_path.read_text(encoding=self.encoding)
+        except OSError as exc:
+            raise SWEAgentToolError(f"读取原文件失败: {exc}") from exc
+        context_start = context_start_line
+        context_end = context_end_line
+        context_snippet = original.splitlines(keepends=True)[context_start - 1:context_end]
+        context_snippet = "".join(context_snippet)
+
+        default_model_name = getattr(self._llm, "model_name", None) if self._llm else None
+        attempt_record: Dict[str, Any] = {
+            "relative": relative,
+            "target_path": str(target_path),
+            "instructions": instructions.strip(),
+            "code_edit": code_edit,
+            "context_start_line": context_start,
+            "context_end_line": context_end,
+            "original_content": original,
+            "context_snippet": context_snippet,
+            "placeholder_count": placeholder_count,
+            "created_at": time.time(),
+            "model_name": default_model_name,
+            "smart_model": self.placeholder_merge_model,
+            "reapply_count": 0,
+        }
+
+        # result = asyncio.run(edit_snippet({"original_code": context_snippet, "edit_snippet": code_edit,"file_path": target_path}))
+        # return result
+
+        final_snippet = self._call_llm_placeholder_merge(
+        # final_snippet = self._call_llm_edit_snippet(
+            relative_path=relative,
+            original=original,
+            edit_script=code_edit,
+            context_snippet=context_snippet,
+            context_start_line=context_start,
+            context_end_line=context_end,
+            instructions=instructions
+        )
+
+        attempt_record["final_snippet"] = final_snippet
+        self._last_edit_attempts[relative] = attempt_record
+
+        original_lines = original.splitlines(keepends=True)
+        total_lines = len(original_lines)
+
+        start_idx = max(context_start - 1, 0)
+        if start_idx > total_lines:
+            start_idx = total_lines
+
+        if context_end <= 0:
+            end_idx = start_idx
+        else:
+            end_idx = min(context_end, total_lines)
+            if end_idx < start_idx:
+                end_idx = start_idx
+
+        context_lines = original_lines[start_idx:end_idx]
+        snippet_lines = final_snippet.splitlines(keepends=True)
+
+        if snippet_lines and context_lines:
+            snippet_lines[0] = self._reconcile_boundary_line(snippet_lines[0], context_lines[0])
+            if len(snippet_lines) > 1:
+                snippet_lines[-1] = self._reconcile_boundary_line(snippet_lines[-1], context_lines[-1])
+
+        merged_lines = original_lines[:start_idx] + snippet_lines + original_lines[end_idx:]
+        final_content = "".join(merged_lines)
+
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise SWEAgentToolError(f"创建目录失败: {exc}") from exc
+
+        original_tmp: Optional[Path] = None
+        final_tmp: Optional[Path] = None
+        patch_tmp: Optional[Path] = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding=self.encoding,
+                delete=False,
+                dir=self._workspace_root,
+            ) as original_file:
+                original_file.write(original)
+                original_tmp = Path(original_file.name)
+
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding=self.encoding,
+                delete=False,
+                dir=self._workspace_root,
+            ) as final_file:
+                final_file.write(final_content)
+                final_tmp = Path(final_file.name)
+
+            diff_cmd = [
+                "diff",
+                "-u",
+                "--ignore-blank-lines",
+                "--strip-trailing-cr",
+                str(original_tmp),
+                str(final_tmp),
+            ]
+
+            diff_stdout = ""
+            diff_stderr = ""
+
             try:
-                original = target_path.read_text(encoding=self.encoding)
-            except OSError as exc:
-                raise SWEAgentToolError(f"读取原文件失败: {exc}") from exc
+                diff_proc = subprocess.run(
+                    diff_cmd,
+                    cwd=self._workspace_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.command_timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SWEAgentToolError(f"生成补丁超时（>{self.command_timeout}s）") from exc
 
-            merged_parts: List[str] = []
-            position = 0
-            total_segments = len(segments)
+            if diff_proc.returncode not in (0, 1):
+                diff_stdout, _ = self._clip_output(diff_proc.stdout)
+                diff_stderr, _ = self._clip_output(diff_proc.stderr)
+                cmd_str = " ".join(shlex.quote(part) for part in diff_cmd)
+                raise SWEAgentToolError(
+                    f"生成补丁失败：命令 {cmd_str} 退出码 {diff_proc.returncode}\n"
+                    f"STDOUT:\n{diff_stdout}\nSTDERR:\n{diff_stderr}"
+                )
 
-            for idx, segment in enumerate(segments):
-                if segment:
-                    merged_parts.append(segment)
-                    anchor = self._locate_anchor(original, segment, position)
-                    if anchor != -1:
-                        position = anchor + len(segment)
+            patch_text = diff_proc.stdout
+            stdout = ""
+            stderr = ""
 
-                if idx < len(placeholders):
-                    next_segment = segments[idx + 1] if idx + 1 < total_segments else ""
-                    if next_segment:
-                        anchor = self._locate_anchor(original, next_segment, position)
-                        if anchor == -1:
-                            raise SWEAgentToolError(
-                                "无法定位占位符上下文，请提供更多上下文。"
-                            )
-                        merged_parts.append(original[position:anchor])
-                        position = anchor
+            if patch_text.strip():
+
+                adjusted_lines: List[str] = []
+                replaced_old_header = False
+                replaced_new_header = False
+
+                for line in patch_text.splitlines(keepends=True):
+                    if not replaced_old_header and line.startswith("--- "):
+                        adjusted_lines.append(f"--- a/{relative}\n")
+                        replaced_old_header = True
+                    elif not replaced_new_header and line.startswith("+++ "):
+                        adjusted_lines.append(f"+++ b/{relative}\n")
+                        replaced_new_header = True
                     else:
-                        merged_parts.append(original[position:])
-                        position = len(original)
+                        adjusted_lines.append(line)
 
-            final_content = "".join(merged_parts)
-            try:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(final_content, encoding=self.encoding)
-            except OSError as exc:
-                raise SWEAgentToolError(f"写入文件失败: {exc}") from exc
+                patch_text = "".join(adjusted_lines)
 
-            return {
-                "tool": "edit_file",
-                "mode": "merge",
-                "instructions": instructions,
-                "target_file": relative,
-                "bytes": len(final_content.encode(self.encoding)),
-            }
+                # refined_patch = self._refine_patch_with_llm(
+                #     instructions=instructions,
+                #     patch_text=patch_text,
+                #     code_edit=code_edit,
+                #     context_snippet=context_snippet,
+                # )
 
-        message = self.write_file(relative, cleaned, create_parents=True)
+                # import ipdb; ipdb.set_trace()
+
+                # if refined_patch.strip():
+                #     patch_text = refined_patch
+
+                if not patch_text.endswith("\n"):
+                    patch_text += "\n"
+
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding=self.encoding,
+                    delete=False,
+                    dir=self._workspace_root,
+                    suffix=".patch",
+                ) as patch_file:
+                    patch_file.write(patch_text)
+                    patch_tmp = Path(patch_file.name)
+
+                with open("change.patch", "w", encoding=self.encoding) as f:
+                    f.write(patch_text)
+
+                # patch_cmd = ["patch", "-p0", "-l", "-i", str(patch_tmp)]
+                patch_cmd = ["git", "apply", "--ignore-whitespace", "--recount", "-v", str(patch_tmp)]
+                try:
+                    patch_proc = subprocess.run(
+                        patch_cmd,
+                        cwd=self._workspace_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.command_timeout,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise SWEAgentToolError(f"应用补丁超时（>{self.command_timeout}s）") from exc
+
+                patch_stdout = ""
+                patch_stderr = ""
+                if patch_proc.returncode != 0:
+                    patch_stdout, _ = self._clip_output(patch_proc.stdout)
+                    patch_stderr, _ = self._clip_output(patch_proc.stderr)
+                    cmd_str = " ".join(shlex.quote(part) for part in patch_cmd)
+                    raise SWEAgentToolError(
+                        f"应用补丁失败：命令 {cmd_str} 退出码 {patch_proc.returncode}\n"
+                        f"STDOUT:\n{patch_stdout}\nSTDERR:\n{patch_stderr}"
+                    )
+
+                patch_stdout, _ = self._clip_output(patch_proc.stdout)
+                patch_stderr, _ = self._clip_output(patch_proc.stderr)
+                stdout = patch_stdout
+                stderr = patch_stderr
+        except OSError as exc:
+            raise SWEAgentToolError(f"写入临时文件失败: {exc}") from exc
+        finally:
+            for tmp_path in (original_tmp, final_tmp, patch_tmp):
+                if tmp_path is not None:
+                    with suppress(Exception):
+                        tmp_path.unlink()
+
+        self._last_read_context = None
+
         return {
             "tool": "edit_file",
-            "mode": "write",
-            "instructions": instructions,
+            "mode": "merge",
+            "instructions": instructions.strip(),
             "target_file": relative,
-            "message": message,
-            "bytes": len(cleaned.encode(self.encoding)),
+            "placeholders": placeholder_count,
+            "bytes": len(final_content.encode(self.encoding)),
+            "patch_applied": f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}", 
+            "diff": self._summarize_diff(patch_text),
+            # "context_start_line": start_line,
+            # "context_end_line": end_line,
         }
+
+    def reapply(self, target_file: str) -> Dict[str, Any]:
+        """使用更智能的模型重新应用最近一次 ``edit_file`` 生成的改动。
+
+        典型用法是在调用 ``edit_file`` 后发现实际应用的 diff 与预期不符时，紧接着调用本工具，
+        让更智能的模型基于同一段上下文和指令重新生成补丁。
+
+        参数:
+            target_file: 需要重试的文件路径，使用工作区根目录的相对路径或绝对路径。
+
+        """
+        target_path = self._resolve_path(target_file)
+        if not target_path.exists():
+            raise SWEAgentToolError("目标文件不存在，无法重试 edit_file 操作")
+
+        relative = self._relative_to_root(target_path)
+        attempt = self._last_edit_attempts.get(relative)
+        if attempt is None:
+            raise SWEAgentToolError("未找到可重试的 edit_file 记录，请先调用 edit_file。")
+
+        try:
+            current_content = target_path.read_text(encoding=self.encoding)
+        except OSError as exc:
+            raise SWEAgentToolError(f"读取文件失败: {exc}") from exc
+
+        last_final = attempt.get("final_content")
+        if last_final is not None and current_content != last_final:
+            raise SWEAgentToolError(
+                "目标文件自上次 edit_file 后已被修改，无法安全重试。请重新读取并重新编辑或手动回滚。"
+            )
+
+        context_start = attempt.get("context_start_line")
+        context_end = attempt.get("context_end_line")
+        if not isinstance(context_start, int) or not isinstance(context_end, int):
+            raise SWEAgentToolError("缺少上次 edit_file 的上下文行号，无法重试。")
+
+        code_edit = attempt.get("code_edit")
+        instructions = attempt.get("instructions")
+        if not code_edit or not instructions:
+            raise SWEAgentToolError("缺少上次 edit_file 的指令或编辑内容，无法重试。")
+
+        original_content = attempt.get("original_content")
+        if original_content is None:
+            raise SWEAgentToolError("缺少上次 edit_file 的原始文件内容，无法重试。")
+
+        original_lines = original_content.splitlines(keepends=True)
+        context_snippet = attempt.get("context_snippet")
+        if context_snippet is None:
+            context_snippet = "".join(original_lines[context_start - 1:context_end])
+
+        placeholder_count = attempt.get("placeholder_count")
+        if placeholder_count is None:
+            placeholder_count = self._count_placeholders(code_edit)
+
+        previous_model = attempt.get("model_name")
+        candidate_models: List[str] = []
+        if self.placeholder_merge_model:
+            candidate_models.append(self.placeholder_merge_model)
+        env_model = os.getenv("SWE_REAPPLY_MODEL")
+        if env_model:
+            candidate_models.append(env_model)
+        candidate_models.append(llm_default_model)
+        if previous_model:
+            candidate_models.append(previous_model)
+
+        smart_model: Optional[str] = None
+        for model_name in candidate_models:
+            if not model_name:
+                continue
+            normalized = model_name.strip()
+            if not normalized:
+                continue
+            if previous_model and normalized == previous_model:
+                continue
+            smart_model = normalized
+            break
+
+        if smart_model is None:
+            smart_model = previous_model
+
+        final_snippet = self._call_llm_placeholder_merge(
+            relative_path=relative,
+            original=original_content,
+            edit_script=code_edit,
+            context_snippet=context_snippet,
+            context_start_line=context_start,
+            context_end_line=context_end,
+            instructions=instructions,
+            model=smart_model,
+        )
+
+        total_lines = len(original_lines)
+        start_idx = max(context_start - 1, 0)
+        if start_idx > total_lines:
+            start_idx = total_lines
+
+        if context_end <= 0:
+            end_idx = start_idx
+        else:
+            end_idx = min(context_end, total_lines)
+            if end_idx < start_idx:
+                end_idx = start_idx
+
+        context_lines = original_lines[start_idx:end_idx]
+        snippet_lines = final_snippet.splitlines(keepends=True)
+
+        if snippet_lines and context_lines:
+            snippet_lines[0] = self._reconcile_boundary_line(snippet_lines[0], context_lines[0])
+            if len(snippet_lines) > 1:
+                snippet_lines[-1] = self._reconcile_boundary_line(snippet_lines[-1], context_lines[-1])
+
+        final_content = "".join(original_lines[:start_idx] + snippet_lines + original_lines[end_idx:])
+
+        current_tmp: Optional[Path] = None
+        final_tmp: Optional[Path] = None
+        patch_tmp: Optional[Path] = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding=self.encoding,
+                delete=False,
+                dir=self._workspace_root,
+            ) as current_file:
+                current_file.write(current_content)
+                current_tmp = Path(current_file.name)
+
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding=self.encoding,
+                delete=False,
+                dir=self._workspace_root,
+            ) as final_file:
+                final_file.write(final_content)
+                final_tmp = Path(final_file.name)
+
+            diff_cmd = [
+                "diff",
+                "-u",
+                "--ignore-blank-lines",
+                "--strip-trailing-cr",
+                str(current_tmp),
+                str(final_tmp),
+            ]
+
+            try:
+                diff_proc = subprocess.run(
+                    diff_cmd,
+                    cwd=self._workspace_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.command_timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SWEAgentToolError(f"生成补丁超时（>{self.command_timeout}s）") from exc
+
+            if diff_proc.returncode not in (0, 1):
+                diff_stdout, _ = self._clip_output(diff_proc.stdout)
+                diff_stderr, _ = self._clip_output(diff_proc.stderr)
+                cmd_str = " ".join(shlex.quote(part) for part in diff_cmd)
+                raise SWEAgentToolError(
+                    f"生成补丁失败：命令 {cmd_str} 退出码 {diff_proc.returncode}\n"
+                    f"STDOUT:\n{diff_stdout}\nSTDERR:\n{diff_stderr}"
+                )
+
+            patch_text = diff_proc.stdout
+
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding=self.encoding,
+                delete=False,
+                dir=self._workspace_root,
+                suffix=".patch",
+            ) as patch_file:
+                patch_file.write(patch_text if patch_text.endswith("\n") else patch_text + "\n")
+                patch_tmp = Path(patch_file.name)
+
+            with open("change.patch", "w", encoding=self.encoding) as fh:
+                fh.write(patch_text)
+
+            patch_cmd = ["git", "apply", "--ignore-whitespace", "--recount", "-v", str(patch_tmp)]
+
+            try:
+                patch_proc = subprocess.run(
+                    patch_cmd,
+                    cwd=self._workspace_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.command_timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SWEAgentToolError(f"应用补丁超时（>{self.command_timeout}s）") from exc
+
+            if patch_proc.returncode != 0:
+                patch_stdout, _ = self._clip_output(patch_proc.stdout)
+                patch_stderr, _ = self._clip_output(patch_proc.stderr)
+                cmd_str = " ".join(shlex.quote(part) for part in patch_cmd)
+                raise SWEAgentToolError(
+                    f"应用补丁失败：命令 {cmd_str} 退出码 {patch_proc.returncode}\n"
+                    f"STDOUT:\n{patch_stdout}\nSTDERR:\n{patch_stderr}"
+                )
+
+            stdout, _ = self._clip_output(patch_proc.stdout)
+            stderr, _ = self._clip_output(patch_proc.stderr)
+
+        finally:
+            for tmp_path in (current_tmp, final_tmp, patch_tmp):
+                if tmp_path is not None:
+                    with suppress(Exception):
+                        tmp_path.unlink()
+
+        used_model = smart_model or previous_model
+        attempt.update(
+            {
+                "final_snippet": final_snippet,
+                "final_content": final_content,
+                "model_name": used_model,
+                "last_tool": "reapply",
+                "diff": self._summarize_diff(patch_text),
+                "reapply_count": attempt.get("reapply_count", 0) + 1,
+                "smart_model": smart_model,
+            }
+        )
+        self._last_edit_attempts[relative] = attempt
+        self._last_read_context = None
+
+        return {
+            "tool": "reapply",
+            "target_file": relative,
+            "instructions": instructions,
+            "model": used_model,
+            "placeholders": placeholder_count,
+            "reapply_count": attempt["reapply_count"],
+            "patch_applied": f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}",
+        }
+
 
     # TODO: fix bug
     def apply_patch(self, patch: str, timeout: Optional[int] = None) -> Dict[str, Any]:
@@ -2267,13 +2939,10 @@ class SWELspTools:
                     {
                         "message": diag.get("message", ""),
                         "severity": severity_name or severity_val,
-                        "severity_value": severity_val,
                         "source": diag.get("source"),
                         "code": diag.get("code"),
                         "start_line": (start.get("line") or 0) + 1,
-                        "start_character": (start.get("character") or 0) + 1,
                         "end_line": (end.get("line") or 0) + 1,
-                        "end_character": (end.get("character") or 0) + 1,
                     }
                 )
 
@@ -2290,11 +2959,6 @@ class SWELspTools:
             "tool": "lsp_get_errors",
             "files": results,
         }
-        if severity_threshold is not None:
-            response["min_severity"] = {
-                "value": severity_threshold,
-                "label": severity_label,
-            }
         if warnings:
             response["warnings"] = warnings
         return response
@@ -2377,7 +3041,8 @@ class SWEAgent(Agent):
             # self.toolset.run_command,
             # self.toolset.run_tests,
             # self.toolset.apply_patch,
-            # self.toolset.edit_file,
+            self.toolset.edit_file,
+            self.toolset.reapply,
             # self.toolset.run_tools_parallel,
             # self.toolset.list_symbol_usages,
             # self.toolset.list_symbol_definitions,

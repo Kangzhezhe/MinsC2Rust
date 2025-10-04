@@ -320,16 +320,16 @@ class SummaryStrategy(BaseMemoryStrategy):
                 new_messages, start_index=previous_summary.message_count + 1
             )
             prompt = (
-                f"用户提供的系统消息：{system_messages}\n"
-                f"请生成包含所有对话历史总结的新累积摘要，尽量保留与系统消息相关的摘要（不超过{self.summary_max_tokens}个字符）。"
+                f"用户提供的系统消息，仅供参考，不要将其摘要：{system_messages}\n"
+                f"请生成包含所有对话历史对话总结的新累积摘要，尽量保留对话历史中与系统消息相关的摘要（不超过{self.summary_max_tokens}个字符）。"
                 f"之前的累积摘要（包含前{previous_summary.message_count}条消息）：{base_summary}\n"
                 f"新增的对话内容（第{previous_summary.message_count + 1}到{end_index}条）：{new_text}\n"
             )
         else:
             conversation_text = self._format_messages(to_summarise[:end_index])
             prompt = (
-                f"用户提供的系统消息：{system_messages}\n"
-                f"请将以下对话历史总结成摘要，尽量保留与系统消息相关的摘要（不超过{self.summary_max_tokens}个字符）：\n"
+                f"用户提供的系统消息，仅供参考，不要将其摘要：{system_messages}\n"
+                f"请将以下对话历史总结成摘要，尽量保留对话历史中与系统消息相关的摘要（不超过{self.summary_max_tokens}个字符）：\n"
                 f"{conversation_text}"
             )
 
