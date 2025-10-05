@@ -1463,7 +1463,12 @@ class SWEFileSystemTools:
 
         final_content = "".join(original_lines[:start_idx] + snippet_lines + original_lines[end_idx:])
 
-        current_tmp: Optional[Path] = None
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise SWEAgentToolError(f"创建目录失败: {exc}") from exc
+
+        original_tmp: Optional[Path] = None
         final_tmp: Optional[Path] = None
         patch_tmp: Optional[Path] = None
 
@@ -1473,9 +1478,9 @@ class SWEFileSystemTools:
                 encoding=self.encoding,
                 delete=False,
                 dir=self._workspace_root,
-            ) as current_file:
-                current_file.write(current_content)
-                current_tmp = Path(current_file.name)
+            ) as original_file:
+                original_file.write(current_content)
+                original_tmp = Path(original_file.name)
 
             with tempfile.NamedTemporaryFile(
                 "w",
@@ -1491,9 +1496,12 @@ class SWEFileSystemTools:
                 "-u",
                 "--ignore-blank-lines",
                 "--strip-trailing-cr",
-                str(current_tmp),
+                str(original_tmp),
                 str(final_tmp),
             ]
+
+            diff_stdout = ""
+            diff_stderr = ""
 
             try:
                 diff_proc = subprocess.run(
@@ -1516,74 +1524,92 @@ class SWEFileSystemTools:
                 )
 
             patch_text = diff_proc.stdout
+            stdout = ""
+            stderr = ""
 
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding=self.encoding,
-                delete=False,
-                dir=self._workspace_root,
-                suffix=".patch",
-            ) as patch_file:
-                patch_file.write(patch_text if patch_text.endswith("\n") else patch_text + "\n")
-                patch_tmp = Path(patch_file.name)
+            if patch_text.strip():
 
-            with open("change.patch", "w", encoding=self.encoding) as fh:
-                fh.write(patch_text)
+                adjusted_lines: List[str] = []
+                replaced_old_header = False
+                replaced_new_header = False
 
-            patch_cmd = ["git", "apply", "--ignore-whitespace", "--recount", "-v", str(patch_tmp)]
+                for line in patch_text.splitlines(keepends=True):
+                    if not replaced_old_header and line.startswith("--- "):
+                        adjusted_lines.append(f"--- a/{relative}\n")
+                        replaced_old_header = True
+                    elif not replaced_new_header and line.startswith("+++ "):
+                        adjusted_lines.append(f"+++ b/{relative}\n")
+                        replaced_new_header = True
+                    else:
+                        adjusted_lines.append(line)
 
-            try:
-                patch_proc = subprocess.run(
-                    patch_cmd,
-                    cwd=self._workspace_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.command_timeout,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise SWEAgentToolError(f"应用补丁超时（>{self.command_timeout}s）") from exc
+                patch_text = "".join(adjusted_lines)
 
-            if patch_proc.returncode != 0:
+                if not patch_text.endswith("\n"):
+                    patch_text += "\n"
+
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding=self.encoding,
+                    delete=False,
+                    dir=self._workspace_root,
+                    suffix=".patch",
+                ) as patch_file:
+                    patch_file.write(patch_text)
+                    patch_tmp = Path(patch_file.name)
+
+                with open("change.patch", "w", encoding=self.encoding) as f:
+                    f.write(patch_text)
+
+                # patch_cmd = ["patch", "-p0", "-l", "-i", str(patch_tmp)]
+                patch_cmd = ["git", "apply", "--ignore-whitespace", "--recount", "-v", str(patch_tmp)]
+                try:
+                    patch_proc = subprocess.run(
+                        patch_cmd,
+                        cwd=self._workspace_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.command_timeout,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise SWEAgentToolError(f"应用补丁超时（>{self.command_timeout}s）") from exc
+
+                patch_stdout = ""
+                patch_stderr = ""
+                if patch_proc.returncode != 0:
+                    patch_stdout, _ = self._clip_output(patch_proc.stdout)
+                    patch_stderr, _ = self._clip_output(patch_proc.stderr)
+                    cmd_str = " ".join(shlex.quote(part) for part in patch_cmd)
+                    raise SWEAgentToolError(
+                        f"应用补丁失败：命令 {cmd_str} 退出码 {patch_proc.returncode}\n"
+                        f"STDOUT:\n{patch_stdout}\nSTDERR:\n{patch_stderr}"
+                    )
+
                 patch_stdout, _ = self._clip_output(patch_proc.stdout)
                 patch_stderr, _ = self._clip_output(patch_proc.stderr)
-                cmd_str = " ".join(shlex.quote(part) for part in patch_cmd)
-                raise SWEAgentToolError(
-                    f"应用补丁失败：命令 {cmd_str} 退出码 {patch_proc.returncode}\n"
-                    f"STDOUT:\n{patch_stdout}\nSTDERR:\n{patch_stderr}"
-                )
-
-            stdout, _ = self._clip_output(patch_proc.stdout)
-            stderr, _ = self._clip_output(patch_proc.stderr)
-
+                stdout = patch_stdout
+                stderr = patch_stderr
+        except OSError as exc:
+            raise SWEAgentToolError(f"写入临时文件失败: {exc}") from exc
         finally:
-            for tmp_path in (current_tmp, final_tmp, patch_tmp):
+            for tmp_path in (original_tmp, final_tmp, patch_tmp):
                 if tmp_path is not None:
                     with suppress(Exception):
                         tmp_path.unlink()
 
-        used_model = smart_model or previous_model
-        attempt.update(
-            {
-                "final_snippet": final_snippet,
-                "final_content": final_content,
-                "model_name": used_model,
-                "last_tool": "reapply",
-                "diff": self._summarize_diff(patch_text),
-                "reapply_count": attempt.get("reapply_count", 0) + 1,
-                "smart_model": smart_model,
-            }
-        )
-        self._last_edit_attempts[relative] = attempt
         self._last_read_context = None
 
         return {
-            "tool": "reapply",
+            "tool": "edit_file",
+            "mode": "merge",
+            "instructions": instructions.strip(),
             "target_file": relative,
-            "instructions": instructions,
-            "model": used_model,
             "placeholders": placeholder_count,
-            "reapply_count": attempt["reapply_count"],
-            "patch_applied": f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}",
+            "bytes": len(final_content.encode(self.encoding)),
+            "patch_applied": f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}", 
+            "diff": self._summarize_diff(patch_text),
+            # "context_start_line": start_line,
+            # "context_end_line": end_line,
         }
 
 
@@ -1732,7 +1758,6 @@ class SWELspTools:
 
     DEFAULT_LANGUAGE_SERVERS: Dict[str, Sequence[Sequence[str]]] = {
         "python": (
-            ("pylsp",),
             (_PYTHON_EXECUTABLE, "-m", "pylsp"),
         ),
         "c": (("clangd", "--background-index"),),

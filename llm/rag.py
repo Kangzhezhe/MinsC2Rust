@@ -213,7 +213,7 @@ def rag_qa(query, docs):
         temperature=0.2
     )
     context = "\n\n".join(docs)
-    prompt = f"""你是知识库问答助手。请根据以下知识内容回答用户问题。\n\n知识内容：\n{context}\n\n用户问题：{query}\n\n请用中文简明回答："""
+    prompt = f"""你是知识库问答助手。请根据以下知识内容回答用户问题。\n\n知识内容：\n{context}\n\n用户问题：{query}\n"""
     result = llm.invoke(prompt)
     # 兼容AIMessage对象和dict
     if hasattr(result, "content"):
@@ -439,6 +439,10 @@ def show_chroma_collection(
             results.append(doc_json)
     return results
 
+HyDE_template = """Please write a C code to answer the question
+Question: {question}
+Code:"""
+
 
 def main():
 
@@ -455,18 +459,34 @@ def main():
         max_len=3000
     )
 
+    llm = ChatOpenAI(
+        base_url=llm_url,
+        api_key=llm_api_key,
+        model=llm_default_model,
+    )
+
     while True:
         query = input("请输入你的问题（exit退出）：").strip()
         if query.lower() == "exit":
             break
+
+        query_hy = llm.invoke(HyDE_template.format(question=query)).content
+        print("\n【用户问题】\n", query)
+        print("\n【HyDE生成的伪文档】\n", query_hy)
+
         docs = search_knowledge_base(
-            query,
+            query_hy,
             collection_name="rag_demo",
             top_k=10,
-            use_rerank=True,
-            rerank_top_n=3
+        )
+
+        docs = rerank_documents(
+            query,
+            docs,
+            top_n=5
         )
         print("\n【检索到的知识块】")
+        
         for i, doc in enumerate(docs):
             print(f"Top{i+1}:\n{doc}\n------")
         answer = rag_qa(query, docs)

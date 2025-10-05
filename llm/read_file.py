@@ -152,16 +152,16 @@ def smart_split(content, max_len=1000, window_expand=200, overlap=100, return_re
             start = max(split_pos - overlap, start)
             continue
 
-        # 4. 句号分割（支持中英文句号），尽量靠近max_len
+        # 4. 符号分割（支持中英文句号），尽量靠近max_len
         period_pos = -1
         for i in range(right, left, -1):
-            if i < len(window) and window[i-1] in ('。', '.','}',';'):
+            if i < len(window) and window[i-1] in ('。', '.','}',';','\n',' '):
                 period_pos = i-1
                 break
         if period_pos > 0:
             split_pos = start + period_pos + 1
             pieces.append(content[start:split_pos].strip())
-            split_reasons.append("句号分割")
+            split_reasons.append("符号分割")
             start = max(split_pos - overlap, start)
             continue
 

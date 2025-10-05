@@ -18,3 +18,6 @@ fastmcp
 websockets
 pytest-asyncio
 json-repair>=0.16.2
+pyflakes
+python-lsp-server
+python-lsp-jsonrpc

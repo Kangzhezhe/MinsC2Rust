@@ -48,6 +48,7 @@ class LLM:
         mcp_configs=None,
         memory_strategy: Optional[Union[str, Dict[str, Any], BaseMemoryStrategy]] = None,
         memory_options: Optional[Dict[str, Any]] = None,
+        timeout: Optional[int] = 60,
     ):
         """
         初始化LLM类，支持传统工具调用和MCP工具调用
@@ -73,6 +74,7 @@ class LLM:
                 api_key=llm_api_key,
                 model=resolved_model_name,
                 temperature=temperature,
+                timeout=timeout,
             )
         self.model_name = resolved_model_name
         self.file_list = None
