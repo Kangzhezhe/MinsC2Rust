@@ -9,6 +9,7 @@
         "hut.h": "c",
         "ht.h": "c",
         "sortedarray.h": "c",
-        "compare-int.h": "c"
+        "compare-int.h": "c",
+        "queue.h": "c"
     }
 }

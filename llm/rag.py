@@ -1,4 +1,5 @@
 import os
+import csv
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -393,6 +394,112 @@ def build_directory_knowledge_base(
         max_len=max_len,
         overlap=overlap
     )
+
+
+def build_csv_mapping_collection(
+    csv_path,
+    key_fields,
+    persist_dir="rag_chroma_db",
+    collection_name="csv_structured_mapping",
+    id_prefix="csv_mapping",
+):
+    """读取任意 CSV，使用指定字段作为 key，其余字段作为 value 构建映射集合。"""
+    if not key_fields:
+        raise ValueError("key_fields 不可为空")
+
+    with open(csv_path, "r", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        rows = list(reader)
+
+    if not rows:
+        raise ValueError(f"未能从 CSV 读取到任何数据: {csv_path}")
+
+    chroma_client = chromadb.PersistentClient(path=persist_dir)
+    collection = chroma_client.get_or_create_collection(collection_name)
+
+    existing = collection.get()
+    existing_ids = existing.get("ids") if existing else None
+    if existing_ids:
+        collection.delete(ids=existing_ids)
+
+    documents = []
+    embeddings_text = []
+    ids = []
+
+    for idx, row in enumerate(rows):
+        if not all(row.get(field) for field in key_fields):
+            continue
+
+        key = {field: row[field].strip() for field in key_fields}
+        value = {
+            field: row[field].strip()
+            for field in row
+            if field not in key_fields and row.get(field)
+        }
+
+        key_text = "\n".join(f"{field}: {value}" for field, value in key.items())
+        document = json.dumps({"key": key, "value": value}, ensure_ascii=False)
+
+        embeddings_text.append(key_text)
+        documents.append(document)
+        ids.append(f"{id_prefix}_{idx}")
+
+    if not embeddings_text:
+        raise ValueError("CSV 中缺少有效的 key 字段数据，无法构建映射知识库。")
+
+    embeddings = get_embeddings(embeddings_text, batch_size=8, max_workers=4)
+    collection.add(ids=ids, embeddings=embeddings, documents=documents)
+
+    return collection
+
+
+def format_csv_mapping_query(key_values, key_fields=None):
+    """辅助函数：将 key 字段字典格式化为查询字符串。"""
+    if not isinstance(key_values, dict) or not key_values:
+        raise ValueError("key_values 需为非空字典")
+
+    if key_fields is None:
+        key_fields = list(key_values.keys())
+
+    missing = [field for field in key_fields if field not in key_values]
+    if missing:
+        raise ValueError(f"key_values 缺少必要字段: {missing}")
+
+    ordered_items = [(field, key_values[field]) for field in key_fields]
+    return "\n".join(f"{field}: {value}" for field, value in ordered_items)
+
+
+def query_csv_mapping_collection(
+    query_text,
+    persist_dir="rag_chroma_db",
+    collection_name="csv_structured_mapping",
+    top_k=3,
+):
+    """根据已格式化的查询字符串检索映射集合中的相关记录。"""
+    if not isinstance(query_text, str) or not query_text.strip():
+        raise ValueError("query_text 需为非空字符串")
+
+    query_embedding = get_embedding(query_text.strip())
+
+    chroma_client = chromadb.PersistentClient(path=persist_dir)
+    collection = chroma_client.get_or_create_collection(collection_name)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k,
+        include=["documents"],
+    )
+
+    docs = results.get("documents") or []
+    if not docs:
+        return []
+
+    parsed = []
+    for doc in docs[0]:
+        try:
+            parsed.append(json.loads(doc))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return parsed
 
 
 def show_chroma_collection(

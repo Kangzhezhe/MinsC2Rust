@@ -130,7 +130,7 @@ def demonstrate_errors(agent: SWEAgent, max_rounds: int = 5) -> None:
 def demonstrate_errors_fix(agent: SWEAgent, max_rounds: int = 5) -> None:
     task_description = textwrap.dedent(
         f"""
-        帮我修改一下所有的代码编译错误
+        帮我修改一下所有的C语言代码编译错误
         """
     ).strip()
 

@@ -14,3 +14,7 @@ rag_chroma_db/
 .pytest_cache/
 pylspclient/
 code_qa/
+output/
+
+log.txt
+change.patch

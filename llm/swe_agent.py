@@ -986,6 +986,7 @@ class SWEFileSystemTools:
             你是一名代码合并助手。
             请使用提供的原始文件、上下文片段<CONTEXT_SNIPPET>以及包含占位符的编辑脚本<PLACEHOLDER_EDIT>，生成目标片段的最终内容。
             特别注意：生成片段的开头与结尾字符必须与CONTEXT_SNIPPET的开头结尾完全一致。
+            编辑脚本格式：existing code 表示省略的未修改代码，采用类似与diff的格式：未修改的上下文行原样保留；新增行前加 `+`；- 删除行前加 `-`；
 
             你是一个为代码编辑器提供帮助的助手，负责将编辑内容应用到代码上并进行合并。你会收到用 <CONTEXT_SNIPPET> 标签包裹的代码和用 <PLACEHOLDER_EDIT> 标签包裹的编辑内容，你需要将编辑内容应用到代码中。
 
@@ -1059,31 +1060,42 @@ class SWEFileSystemTools:
     def _summarize_diff(self, diff_text: str) -> str:
         """清理 diff 字符串，仅保留行头与实际改动行。"""
         if not diff_text or not diff_text.strip():
-            return "(无改动)，请提供更多上下文或者用更智能的模型重新生成补丁。"
+            return "(无改动)"
         keep_prefixes = ("diff --", "index ", "@@", "---", "+++")
         cleaned: List[str] = []
         for line in diff_text.splitlines():
             if line.startswith(("+", "-")) or any(line.startswith(prefix) for prefix in keep_prefixes):
                 cleaned.append(line)
         if not cleaned:
-            return "(无改动)，请提供更多上下文或者用更智能的模型重新生成补丁。"
+            return "(无改动)"
         return "\n".join(cleaned) + "\n" +"如果你发现生成的diff并不是你期望的更改，使用reapply 工具让更智能的模型基于同一段上下文和指令重新生成补丁。"
 
     def edit_file(self, target_file: str, context_start_line:int, context_end_line:int, instructions: str, code_edit: str) -> Dict[str, Any]:
         """用于创建或更新单个文件，在调用该工具前一个工具必须一定通过 read_file 读取待修改的同一文件片段，保证查看文件的足够内容以确认文件将进行的修改。
             - `instructions` 必须由第一人称一句话组成，用来明确你打算进行的修改，如“我将更新处理函数以记录错误”。保持简短有助于下游模型正确理解意图。
             - (required) `context_start_line` 和 `context_end_line` 必须给定确定的范围 必须大于最近几次同文件 read_file 返回的行号范围，如果该范围太大（超过500），则分多次编辑，表示当前编辑内容在文件中的位置。
+            - 采用类似与diff的格式：未修改的上下文行原样保留；新增行前加 `+`；- 删除行前加 `-`；
             - 在 `code_edit` 中提供完整编辑内容，写法如下：
             - **片段编辑**：未修改文本使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。
-            - **上下文定位**：这个code_edit 会传给一个下游小模型应用更改，需要修改的文本周围请提供足够的上下文（unchanged_context :至少3行）以便唯一定位每段修改。
+            - **上下文定位**：这个code_edit 会传给一个下游小模型应用更改，需要修改的文本周围请提供足够的上下文（unchanged_context :额外的上下文至少3行）以便唯一定位每段修改。
+
+例如：如果你需要修改两个函数 add/sub，确保在函数定义前后各保留至少 3 行未改动的代码。
+// ... existing code ...
+fn add(a: i32, b: i32) -> i32 {
+-    let sum = a + b;
+-    sum
++    a + b
+}
+fn mul(a: i32, b: i32) -> i32 {
+// ... existing code ...
+fn sub(a: i32, b: i32) -> i32 {
+-    let diff = a - b
++    let diff = a - b;
+    diff
+}
+// ... existing code ...
 
             - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
-            例如： 
-// ... existing code ...
-(changed_content1)
-// ... existing code ...
-(changed_content2)
-// ... existing code ...
             - **reapply**: 如果你发现生成的diff并不是期望的，让更智能的模型基于同一段上下文和指令重新生成补丁。
 """
         MAX_EDIT_FILE_LENGTH = 500
@@ -3063,7 +3075,7 @@ class SWEAgent(Agent):
             # self.toolset.append_file,
             self.toolset.grep_search,
             self.toolset.search_replace,
-            # self.toolset.run_command,
+            self.toolset.run_command,
             # self.toolset.run_tests,
             # self.toolset.apply_patch,
             self.toolset.edit_file,
@@ -3075,8 +3087,8 @@ class SWEAgent(Agent):
         if self.lsp_toolset is not None:
             tools.extend(
                 [
-                    self.lsp_toolset.lsp_list_symbol_definitions,
-                    self.lsp_toolset.lsp_list_symbol_usages,
+                    # self.lsp_toolset.lsp_list_symbol_definitions,
+                    # self.lsp_toolset.lsp_list_symbol_usages,
                     self.lsp_toolset.lsp_get_errors,
                 ]
             )

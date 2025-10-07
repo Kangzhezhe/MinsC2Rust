@@ -284,8 +284,9 @@ class Analyzer:
     def get_dependencies(
         self,
         start: SymbolRef | str,
-        depth: int = 1,
+        depth: Optional[int] = 1,
         direction: Literal["out", "in", "both"] = "out",
+        symbol_types: Optional[Iterable[str]] = None,
     ) -> Tuple[List[SymbolRef], List[Edge]]:
         """
         获取符号在给定层数内的相关符号与边。
@@ -293,8 +294,11 @@ class Analyzer:
         - direction = "out": 出边（依赖谁）
         - direction = "in": 入边（被谁依赖）
         - direction = "both": 双向
-        返回 (节点列表, 边列表)，节点包含起点与遍历到的所有节点，边为去重后集合。
+        返回 (节点列表, 边列表)，节点包含符合过滤条件的起点与遍历到的所有节点，边为去重后集合。
         如当前未加载全量依赖边，则对起点按需解析其依赖一次（仅第一层）。
+
+        参数：
+        - symbol_types: 当提供时，仅保留类型属于该集合的符号与其相互之间的边；遍历仍会穿过其它类型节点。
         """
         start_key = start if isinstance(start, str) else start.key()
         if start_key not in self._by_key:
@@ -305,13 +309,23 @@ class Analyzer:
             self._augment_edges_for_symbol_once(self._by_key[start_key])
 
         seen_nodes: Set[str] = set([start_key])
-        nodes: List[SymbolRef] = [self._by_key[start_key]]
+        nodes: List[SymbolRef] = []
         edges: List[Edge] = []
+        edge_seen: Set[Tuple[str, str, str]] = set()
+
+        type_filter: Optional[Set[str]] = set(symbol_types) if symbol_types else None
+
+        def include(sym: SymbolRef) -> bool:
+            return not type_filter or sym.type in type_filter
+
+        start_sym = self._by_key[start_key]
+        if include(start_sym):
+            nodes.append(start_sym)
 
         frontier: List[Tuple[str, int]] = [(start_key, 0)]
         while frontier:
             cur, d = frontier.pop(0)
-            if d >= depth:
+            if depth is not None and d >= depth:
                 continue
 
             # 若依赖未预先加载，且当前节点无出边且需要前向遍历，则尝试按需补齐当前节点的出边
@@ -327,10 +341,20 @@ class Analyzer:
                 nxt = e.target if e.source == cur else e.source
                 if nxt not in seen_nodes and nxt in self._by_key:
                     seen_nodes.add(nxt)
-                    nodes.append(self._by_key[nxt])
                     frontier.append((nxt, d + 1))
-                if e not in edges:
-                    edges.append(e)
+
+                nxt_sym = self._by_key.get(nxt)
+                src_sym = self._by_key.get(e.source)
+                tgt_sym = self._by_key.get(e.target)
+
+                if nxt_sym and include(nxt_sym) and nxt_sym not in nodes:
+                    nodes.append(nxt_sym)
+
+                if src_sym and tgt_sym and include(src_sym) and include(tgt_sym):
+                    edge_key = (e.source, e.target, e.dep_type)
+                    if edge_key not in edge_seen:
+                        edge_seen.add(edge_key)
+                        edges.append(e)
 
         return nodes, edges
 

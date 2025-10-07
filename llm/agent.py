@@ -27,7 +27,7 @@ class Agent:
         self,
         model=None,
         temperature=0.3,
-        history_len=5,
+        history_len=0,
         logger=False,
         max_iterations=5,
         max_consecutive_tools=None,

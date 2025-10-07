@@ -113,6 +113,129 @@ def create_symbol_to_cycle_group_mapping(cycle_groups: List[List[str]]) -> Dict[
     return symbol_to_group
 
 
+def load_symbol_dependencies(dependencies_path: Optional[str]) -> List[Dict]:
+    """加载符号依赖列表，若不存在则返回空列表"""
+    if not dependencies_path:
+        return []
+
+    path = Path(dependencies_path)
+    if not path.exists():
+        return []
+
+    try:
+        with path.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as exc:  # pragma: no cover - I/O 错误
+        print(f"⚠️ 无法读取依赖文件 {dependencies_path}: {exc}")
+        return []
+
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+        deps = data.get('dependencies')
+        if isinstance(deps, list):
+            return deps
+    return []
+
+
+def _symbol_key(symbol: Dict) -> Optional[Tuple[str, str]]:
+    name = symbol.get('name')
+    sym_type = symbol.get('type')
+    if not name:
+        return None
+    return (name, sym_type or '')
+
+
+def _dep_key(entry: Dict) -> Optional[Tuple[str, str]]:
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get('name')
+    sym_type = entry.get('type')
+    if not name:
+        return None
+    return (name, sym_type or '')
+
+
+def reorder_symbols_by_dependencies(symbols: List[Dict], deps: List[Dict]) -> List[Dict]:
+    """根据依赖关系对同一文件内的符号进行拓扑排序"""
+    if len(symbols) <= 1 or not deps:
+        return symbols
+
+    key_to_symbol: Dict[Tuple[str, str], Dict] = {}
+    original_order: Dict[Tuple[str, str], int] = {}
+    for idx, symbol in enumerate(symbols):
+        key = _symbol_key(symbol)
+        if key is None:
+            return symbols  # 存在匿名符号，无法建立映射，保持原顺序
+        if key in key_to_symbol:
+            return symbols  # 同名同类型重复，保持原顺序
+        key_to_symbol[key] = symbol
+        original_order[key] = idx
+
+    adjacency: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {k: set() for k in key_to_symbol.keys()}
+    indegree: Dict[Tuple[str, str], int] = {k: 0 for k in key_to_symbol.keys()}
+
+    for dep in deps:
+        source = _dep_key(dep.get('source', {}))
+        target = _dep_key(dep.get('target', {}))
+        if source is None or target is None:
+            continue
+        if source not in indegree or target not in indegree:
+            continue
+        if source == target:
+            continue
+        # source 依赖 target，需要 target 在前 -> 添加 target -> source 边
+        if source not in adjacency[target]:
+            adjacency[target].add(source)
+            indegree[source] += 1
+
+    queue = [key for key, deg in indegree.items() if deg == 0]
+    ordered_keys: List[Tuple[str, str]] = []
+
+    while queue:
+        queue.sort(key=lambda k: original_order.get(k, float('inf')))
+        current = queue.pop(0)
+        ordered_keys.append(current)
+        for neighbor in adjacency[current]:
+            indegree[neighbor] -= 1
+            if indegree[neighbor] == 0:
+                queue.append(neighbor)
+
+    if len(ordered_keys) != len(key_to_symbol):
+        # 存在环或缺失，回退原顺序
+        return symbols
+
+    return [key_to_symbol[key] for key in ordered_keys]
+
+
+def apply_dependency_ordering(files: Dict[str, Dict], dependencies: List[Dict]) -> int:
+    """根据依赖关系调整每个文件内部符号顺序，返回调整的文件数"""
+    if not dependencies:
+        return 0
+
+    deps_by_file: Dict[str, List[Dict]] = defaultdict(list)
+    for dep in dependencies:
+        source = dep.get('source', {})
+        target = dep.get('target', {})
+        source_file = source.get('file') or source.get('file_path')
+        target_file = target.get('file') or target.get('file_path')
+        if not source_file or source_file != target_file:
+            continue
+        deps_by_file[source_file].append(dep)
+
+    adjusted = 0
+    for file_path, info in files.items():
+        file_deps = deps_by_file.get(file_path)
+        if not file_deps:
+            continue
+        ordered = reorder_symbols_by_dependencies(info.get('symbols', []), file_deps)
+        if ordered != info.get('symbols', []):
+            info['symbols'] = ordered
+            adjusted += 1
+    return adjusted
+
+
 def create_file_batches(ordered_files: List[str], 
                        file_cycle_groups: List[List[str]],
                        files: Dict[str, Dict],
@@ -514,6 +637,8 @@ def main():
                        help="拓扑排序结果文件（默认读取配置的输出目录）")
     parser.add_argument("--analysis", default=str(_DEFAULT_OUTPUT_DIR / "c_project_analysis.json"),
                        help="C项目分析结果文件（默认读取配置的输出目录）")
+    parser.add_argument("--dependencies", default=str(_DEFAULT_OUTPUT_DIR / "symbol_dependencies.json"),
+                       help="符号依赖关系文件（用于排序符号，默认为配置输出目录）")
     
     # 配置参数
     parser.add_argument("--batch-size", type=int, default=1,
@@ -536,6 +661,10 @@ def main():
     if not analysis_path.is_absolute():
         analysis_path = (_DEFAULT_OUTPUT_DIR / analysis_path).resolve()
 
+    dependencies_path = Path(args.dependencies)
+    if not dependencies_path.is_absolute():
+        dependencies_path = (_DEFAULT_OUTPUT_DIR / dependencies_path).resolve()
+
     if not topo_path.exists():
         print(f"错误: 文件不存在 {topo_path}")
         return 1
@@ -549,6 +678,14 @@ def main():
     # 加载数据
     files = load_file_analysis(str(analysis_path))
     ordered_files, file_cycle_groups = load_file_topology(str(topo_path))
+
+    dependencies = load_symbol_dependencies(str(dependencies_path))
+    adjusted_files = apply_dependency_ordering(files, dependencies)
+
+    if dependencies:
+        print(f"已根据符号依赖调整 {adjusted_files} 个文件的符号顺序")
+    else:
+        print("未加载到符号依赖文件，保留原始符号顺序")
     
     print(f"加载了 {len(files)} 个文件")
     print(f"文件拓扑顺序包含 {len(ordered_files)} 个文件")

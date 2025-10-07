@@ -30,6 +30,23 @@ def _load_config_dict() -> Dict[str, Any]:
         raise AnalyzerConfigError("配置文件根结点必须是映射对象")
     return data
 
+@lru_cache(maxsize=1)
+def load_rust_output_dir() -> Path:
+    if not CONFIG_PATH.exists():
+        raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
+
+    with CONFIG_PATH.open("r", encoding="utf-8") as fh:
+        config_data = yaml.safe_load(fh) or {}
+
+    rust_output_value = config_data.get("rust_output")
+    if not rust_output_value:
+        raise ValueError("配置文件缺少 rust_output 字段")
+
+    rust_output_path = Path(rust_output_value)
+    if not rust_output_path.is_absolute():
+        rust_output_path = (CONFIG_PATH.parent / rust_output_path).resolve()
+
+    return rust_output_path
 
 @lru_cache(maxsize=1)
 def get_project_root() -> Path:

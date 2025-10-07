@@ -1,6 +1,7 @@
 # Analyzer configuration
 # project_root 可以是绝对路径或相对于本配置文件所在目录的相对路径
-# project_root: benchmarks/c-algorithm
-project_root: /home/mins/MinsC2Rust/benchmarks/crown/Input
+project_root: benchmarks/c-algorithm
+# project_root: benchmarks/crown/Input
 # 输出目录配置，可以是绝对路径或相对于本配置文件所在目录的相对路径
 output_root: analyzer/output
+rust_output: output
