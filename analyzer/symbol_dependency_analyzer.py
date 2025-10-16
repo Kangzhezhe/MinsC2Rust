@@ -233,7 +233,7 @@ class SymbolDependencyAnalyzer:
             file_path=file_path,
             start_line=symbol_data.get('start_line', 0),
             end_line=symbol_data.get('end_line', 0),
-            definition=symbol_data.get('full_definition', '') or symbol_data.get('text', '')
+            definition=symbol_data.get('full_definition', '') or symbol_data.get('full_declaration', '')
         )
         
         return symbol

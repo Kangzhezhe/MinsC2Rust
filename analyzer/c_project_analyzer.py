@@ -13,8 +13,10 @@ import sys
 
 try:  # 兼容脚本直接执行与模块导入
     from config import get_project_root, get_output_dir, to_relative_path
+    from symbol_model import SymbolModel
 except ImportError:  # pragma: no cover
     from .config import get_project_root, get_output_dir, to_relative_path
+    from .symbol_model import SymbolModel
 
 class CProjectAnalyzer:
     def __init__(self):
@@ -386,21 +388,19 @@ class CProjectAnalyzer:
             # 提取前置注释
             comment = self.extract_preceding_comment(node, root_node, content)
             
-            result = {
-                'name': func_name,
-                'type': 'definition',
-                # 'return_type': return_type if return_type else '',
-                # 'parameters': parameters,
-                'start_line': node.start_point[0] + 1,
-                'end_line': node.end_point[0] + 1,
-                'start_byte': corrected_start,
-                'end_byte': corrected_end,
-                'signature': signature,
-                'full_definition': full_definition,
-                'comment': comment if comment else ''
-            }
-                
-            return result
+            symbol = SymbolModel(
+                name=func_name,
+                type='function_definition',
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_byte=corrected_start,
+                end_byte=corrected_end,
+                full_declaration=signature,
+                full_definition=full_definition,
+                comment=comment or ''
+            )
+
+            return symbol.to_dict()
         except:
             pass
         return None
@@ -481,20 +481,18 @@ class CProjectAnalyzer:
             # 提取前置注释
             comment = self.extract_preceding_comment(node, root_node, content)
             
-            result = {
-                'name': func_name,
-                'type': 'declaration',
-                # 'return_type': return_type if return_type else '',
-                # 'parameters': parameters,
-                'start_line': node.start_point[0] + 1,
-                'end_line': node.end_point[0] + 1,
-                'start_byte': corrected_start,
-                'end_byte': corrected_end,
-                'full_declaration': full_declaration,
-                'comment': comment if comment else ''
-            }
-                
-            return result
+            symbol = SymbolModel(
+                name=func_name,
+                type='function_declaration',
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_byte=corrected_start,
+                end_byte=corrected_end,
+                full_declaration=full_declaration,
+                comment=comment or ''
+            )
+
+            return symbol.to_dict()
         except:
             pass
         return None
@@ -537,47 +535,28 @@ class CProjectAnalyzer:
 
             if struct_name:
                 full_definition = content[struct_node.start_byte:struct_node.end_byte]
-                fields = self.extract_struct_fields(struct_node, content)
                 comment = self.extract_preceding_comment(struct_node, root_node, content)
 
-                struct_info = {
-                    'name': struct_name,
-                    'start_line': struct_node.start_point[0] + 1,
-                    'end_line': struct_node.end_point[0] + 1,
-                    'start_byte': struct_node.start_byte,
-                    'end_byte': struct_node.end_byte,
-                    'full_definition': full_definition,
-                    'fields': fields,
-                    'comment': comment if comment else ''
-                }
+                struct_symbol = SymbolModel(
+                    name=struct_name,
+                    type='struct',
+                    start_line=struct_node.start_point[0] + 1,
+                    end_line=struct_node.end_point[0] + 1,
+                    start_byte=struct_node.start_byte,
+                    end_byte=struct_node.end_byte,
+                    full_declaration=full_definition,
+                    full_definition=full_definition,
+                    comment=comment or ''
+                )
 
-                structs.append(struct_info)
+                structs.append(struct_symbol.to_dict())
 
         structs.sort(key=lambda item: item['start_byte'])
         return structs
     
     def extract_struct_fields(self, struct_node, content):
-        """提取结构体字段"""
-        fields = []
-        
-        def traverse(node):
-            if node.type == 'field_declaration':
-                field_text = content[node.start_byte:node.end_byte].strip()
-                if field_text:
-                    fields.append({
-                        'text': field_text,
-                        'line': node.start_point[0] + 1,
-                        'start_line': node.start_point[0] + 1,
-                        'end_line': node.end_point[0] + 1,
-                        'start_byte': node.start_byte,
-                        'end_byte': node.end_byte
-                    })
-            
-            for child in node.children:
-                traverse(child)
-        
-        traverse(struct_node)
-        return fields
+        """兼容旧接口，现已不再返回字段列表。"""
+        return []
     
     def extract_includes(self, node, content):
         """提取预处理包含指令"""
@@ -585,14 +564,23 @@ class CProjectAnalyzer:
 
         for include_node, _ in self._run_query('includes', node):
             include_text = content[include_node.start_byte:include_node.end_byte].strip()
-            includes.append({
-                'text': include_text,
-                'line': include_node.start_point[0] + 1,
-                'start_line': include_node.start_point[0] + 1,
-                'end_line': include_node.end_point[0] + 1,
-                'start_byte': include_node.start_byte,
-                'end_byte': include_node.end_byte
-            })
+            include_name = include_text.replace('#include', '', 1).strip()
+            if include_name.startswith('<') and include_name.endswith('>'):
+                include_name = include_name[1:-1]
+            elif include_name.startswith('"') and include_name.endswith('"'):
+                include_name = include_name[1:-1]
+
+            symbol = SymbolModel(
+                name=include_name or include_text,
+                type='include',
+                start_line=include_node.start_point[0] + 1,
+                end_line=include_node.end_point[0] + 1,
+                start_byte=include_node.start_byte,
+                end_byte=include_node.end_byte,
+                full_declaration=include_text,
+                full_definition=include_text,
+            )
+            includes.append(symbol.to_dict())
 
         includes.sort(key=lambda item: item['start_byte'])
         return includes
@@ -637,15 +625,22 @@ class CProjectAnalyzer:
                 not is_function_declaration(var_text)):
 
                 comment = self.extract_preceding_comment(decl_node, root_node, content)
-                variables.append({
-                    'text': var_text,
-                    'line': decl_node.start_point[0] + 1,
-                    'start_line': decl_node.start_point[0] + 1,
-                    'end_line': decl_node.end_point[0] + 1,
-                    'start_byte': decl_node.start_byte,
-                    'end_byte': decl_node.end_byte,
-                    'comment': comment if comment else ''
-                })
+                declarator = decl_node.child_by_field_name('declarator')
+                var_name = self.extract_declarator_name(declarator, content) if declarator else ''
+
+                symbol = SymbolModel(
+                    name=var_name or var_text,
+                    type='variable',
+                    start_line=decl_node.start_point[0] + 1,
+                    end_line=decl_node.end_point[0] + 1,
+                    start_byte=decl_node.start_byte,
+                    end_byte=decl_node.end_byte,
+                    full_declaration=var_text,
+                    full_definition=var_text,
+                    comment=comment or ''
+                )
+
+                variables.append(symbol.to_dict())
 
         variables.sort(key=lambda item: item['start_byte'])
         return variables
@@ -662,23 +657,62 @@ class CProjectAnalyzer:
             typedef_name = self.extract_typedef_name(typedef_node, content)
             comment = self.extract_preceding_comment(typedef_node, root_node, content)
 
-            typedefs.append({
-                'text': typedef_text,
-                'name': typedef_name if typedef_name else '',
-                'line': typedef_node.start_point[0] + 1,
-                'start_line': typedef_node.start_point[0] + 1,
-                'end_line': typedef_node.end_point[0] + 1,
-                'start_byte': typedef_node.start_byte,
-                'end_byte': typedef_node.end_byte,
-                'comment': comment if comment else ''
-            })
+            symbol = SymbolModel(
+                name=typedef_name or typedef_text,
+                type='typedef',
+                start_line=typedef_node.start_point[0] + 1,
+                end_line=typedef_node.end_point[0] + 1,
+                start_byte=typedef_node.start_byte,
+                end_byte=typedef_node.end_byte,
+                full_declaration=typedef_text,
+                full_definition=typedef_text,
+                comment=comment or ''
+            )
+
+            typedefs.append(symbol.to_dict())
 
         typedefs.sort(key=lambda item: item['start_byte'])
         return typedefs
+
+    def extract_declarator_name(self, declarator_node, content):
+        """从声明节点提取标识符名称。"""
+        if declarator_node is None:
+            return ''
+        if declarator_node.type == 'parameter_list':
+            return ''
+        if declarator_node.type == 'identifier':
+            return content[declarator_node.start_byte:declarator_node.end_byte]
+
+        child = declarator_node.child_by_field_name('declarator')
+        if child is not None:
+            name = self.extract_declarator_name(child, content)
+            if name:
+                return name
+
+        name_child = declarator_node.child_by_field_name('name')
+        if name_child is not None:
+            name = self.extract_declarator_name(name_child, content)
+            if name:
+                return name
+
+        for child in declarator_node.children:
+            if child.type == 'parameter_list':
+                continue
+            name = self.extract_declarator_name(child, content)
+            if name:
+                return name
+
+        return ''
     
     def extract_typedef_name(self, typedef_node, content):
         """提取typedef的名称"""
         try:
+            declarator = typedef_node.child_by_field_name('declarator')
+            if declarator is not None:
+                name = self.extract_declarator_name(declarator, content)
+                if name:
+                    return name
+
             # 对于函数指针typedef，需要特殊处理
             # 例如: typedef unsigned int (*BloomFilterHashFunc)(BloomFilterValue data);
             # 真正的typedef名称是括号中的标识符
@@ -699,20 +733,19 @@ class CProjectAnalyzer:
             
             def find_identifiers(node):
                 if node.type == 'identifier':
-                    identifiers.append(content[node.start_byte:node.end_byte])
+                    identifiers.append((node.start_byte, content[node.start_byte:node.end_byte]))
                 elif node.type == 'type_identifier':
-                    type_identifiers.append(content[node.start_byte:node.end_byte])
+                    type_identifiers.append((node.start_byte, content[node.start_byte:node.end_byte]))
                 for child in node.children:
                     find_identifiers(child)
             
             find_identifiers(typedef_node)
             
-            # 对于普通typedef，typedef名称通常是最后一个identifier或type_identifier
-            # 优先使用identifier（新定义的类型名），然后使用type_identifier
-            if identifiers:
-                return identifiers[-1]
-            elif type_identifiers:
-                return type_identifiers[-1]
+            # 对于普通typedef，新类型名通常以 type_identifier 形式出现
+            if type_identifiers:
+                return max(type_identifiers, key=lambda item: item[0])[1]
+            elif identifiers:
+                return max(identifiers, key=lambda item: item[0])[1]
             else:
                 return None
         except:
@@ -730,16 +763,19 @@ class CProjectAnalyzer:
             macro_name = self.extract_macro_name(macro_node, content)
             comment = self.extract_preceding_comment(macro_node, root_node, content)
 
-            macros.append({
-                'text': macro_text,
-                'name': macro_name if macro_name else '',
-                'line': macro_node.start_point[0] + 1,
-                'start_line': macro_node.start_point[0] + 1,
-                'end_line': macro_node.end_point[0] + 1,
-                'start_byte': macro_node.start_byte,
-                'end_byte': macro_node.end_byte,
-                'comment': comment if comment else ''
-            })
+            symbol = SymbolModel(
+                name=macro_name or macro_text,
+                type='macro',
+                start_line=macro_node.start_point[0] + 1,
+                end_line=macro_node.end_point[0] + 1,
+                start_byte=macro_node.start_byte,
+                end_byte=macro_node.end_byte,
+                full_declaration=macro_text,
+                full_definition=macro_text,
+                comment=comment or ''
+            )
+
+            macros.append(symbol.to_dict())
 
         macros.sort(key=lambda item: item['start_byte'])
         return macros
@@ -771,35 +807,31 @@ class CProjectAnalyzer:
         """解析枚举定义"""
         try:
             enum_name = None
-            enumerators = []
             
             for child in node.children:
                 if child.type == 'type_identifier':
                     enum_name = content[child.start_byte:child.end_byte]
-                elif child.type == 'enumerator_list':
-                    for enumerator_child in child.children:
-                        if enumerator_child.type == 'enumerator':
-                            enumerator_text = content[enumerator_child.start_byte:enumerator_child.end_byte]
-                            enumerators.append(enumerator_text.strip())
             
             # 提取完整的枚举定义
             full_definition = content[node.start_byte:node.end_byte]
             
             # 提取前置注释
             comment = self.extract_preceding_comment(node, root_node, content)
-            
-            result = {
-                'name': enum_name if enum_name else 'anonymous',
-                'enumerators': enumerators,
-                'start_line': node.start_point[0] + 1,
-                'end_line': node.end_point[0] + 1,
-                'start_byte': node.start_byte,
-                'end_byte': node.end_byte,
-                'full_definition': full_definition,
-                'comment': comment if comment else ''
-            }
-                
-            return result
+
+            name = enum_name if enum_name else 'anonymous_enum'
+            symbol = SymbolModel(
+                name=name,
+                type='enum',
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                start_byte=node.start_byte,
+                end_byte=node.end_byte,
+                full_declaration=full_definition,
+                full_definition=full_definition,
+                comment=comment or ''
+            )
+
+            return symbol.to_dict()
         except:
             pass
         return None

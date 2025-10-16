@@ -4,7 +4,7 @@
 现在也支持MCP工具调用
 """
 import json
-from typing import List, Dict, Any, Optional, Callable, Union
+from typing import List, Dict, Any, Optional, Callable, Union, Tuple
 from .llm import LLM
 from .tool_call import LLMToolCaller
 from .template_parser.template_parser import TemplateParser
@@ -79,6 +79,7 @@ class Agent:
         self.conversation_history = []
         self.mcp_configs = mcp_configs
         self.history_len = history_len
+        self._auto_review_parser = TemplateParser('{"accept": {accept:bool}, "feedback": {feedback:str}}')
         
     def register_tools(self, tools: List[Callable]):
         """
@@ -105,7 +106,9 @@ class Agent:
         self.conversation_history.append(entry)
         
     async def chat_async(self, prompt: str, docs: Optional[List] = None, parser: Optional[TemplateParser] = None, 
-                         use_tools: bool = True, use_mcp: bool = False, **kwargs) -> Dict[str, Any]:
+                         use_tools: bool = True, use_mcp: bool = False,
+                         review_condition: Optional[Union[Callable[[Any, Dict[str, Any]], Any], bool]] = None,
+                         **kwargs) -> Dict[str, Any]:
         """
         异步智能对话接口，支持工具调用和自动重新生成
         
@@ -125,7 +128,7 @@ class Agent:
             "tool_calls": [],
             "iterations": 0,
             "success": True,
-            "error": None
+            "error": None,
         }
         
         try:
@@ -261,9 +264,53 @@ class Agent:
                     continue
                 else:
                     # 获得了最终的聊天结果
-                    result["final_response"] = llm_response
-                    consecutive_tool_calls = 0  # 重置计数
-                    break
+                    should_accept = True
+                    review_feedback = None
+                    if review_condition:
+                        try:
+                            if callable(review_condition):
+                                review_output = review_condition({
+                                    "prompt": current_prompt,
+                                    "llm_response": llm_response,
+                                    "iteration": iteration,
+                                    "tool_calls": result["tool_calls"],
+                                })
+                                if isinstance(review_output, tuple):
+                                    should_accept, review_feedback = review_output
+                                else:
+                                    should_accept = bool(review_output)
+                            else:
+                                should_accept, review_feedback = await self._run_auto_review_async(
+                                    llm_response,
+                                    prompt=current_prompt,
+                                    docs=docs,
+                                    parser=parser,
+                                    use_mcp=use_mcp,
+                                    llm_kwargs=kwargs,
+                                )
+                        except Exception as review_exc:
+                            should_accept = True
+                            review_feedback = f"自动审阅失败: {review_exc}"
+
+                    if should_accept:
+                        result["final_response"] = llm_response
+                        consecutive_tool_calls = 0  # 重置计数
+                        break
+
+                    # 审阅未通过，追加反馈并继续迭代
+                    result["tool_calls"].append({
+                        "name": "auto_review_feedback",
+                        "args": {
+                            "iteration": iteration,
+                            "feedback": review_feedback,
+                        },
+                        "result": "自动审阅未通过",
+                        "type": "review",
+                    })
+                    consecutive_tool_calls = 0
+                    force_final_answer = False
+                    final_answer_notice = ""
+                    continue
             
             # 添加助手回复到历史
             self._add_to_history(
@@ -287,7 +334,9 @@ class Agent:
         return result
 
     def chat(self, prompt: str, docs: Optional[List] = None, parser: Optional[TemplateParser] = None, 
-             use_tools: bool = True, use_mcp: bool = False, **kwargs) -> Dict[str, Any]:
+             use_tools: bool = True, use_mcp: bool = False,
+             review_condition: Optional[Union[Callable[[Any, Dict[str, Any]], Any], bool]] = None,
+             **kwargs) -> Dict[str, Any]:
         """
         智能对话接口，支持工具调用和自动重新生成
         
@@ -314,7 +363,7 @@ class Agent:
             "tool_calls": [],
             "iterations": 0,
             "success": True,
-            "error": None
+            "error": None,
         }
         
         try:
@@ -342,7 +391,9 @@ class Agent:
                     effective_prompt = "\n\n".join(segment for segment in segments if segment)
                 elif iteration == 1:
                     # 第一次调用，使用原始提示词
-                    effective_prompt = current_prompt
+                    effective_prompt =  f"{current_prompt}\n\
+首先你需要思考是否需要更多信息，如果需要则继续调用工具，返回类型为(tool_call: <TOOL_USAGE>标签定义返回格式)。\n\
+如果信息足够回答则基于现有信息给出最终回答返回类型为(str或用户指定的类型: <FINAL_OUTPUT>标签定义返回格式)，不要询问用户是否确认，不要重复调用相同的工具和相同参数。"
                 elif consecutive_tool_calls >= self.max_consecutive_tools:
                     # 连续工具调用过多，要求提供最终答案
                     tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
@@ -353,8 +404,8 @@ class Agent:
                     if result["tool_calls"]:
                         tool_context = self._build_tool_context(result["tool_calls"], current_prompt)
                         effective_prompt = f"{current_prompt}\n\n{tool_context}\n\
-首先你需要思考是否需要更多信息，如果需要则继续调用工具，返回类型为(tool_call)。\n\
-如果信息足够回答则基于现有信息给出最终回答返回类型为(str)，不要询问用户是否确认，不要重复调用相同的工具和相同参数。"
+首先你需要思考是否需要更多信息，如果需要则继续调用工具，返回类型为(tool_call: <TOOL_USAGE>标签定义返回格式)。\n\
+如果信息足够回答则基于现有信息给出最终回答返回类型为(str或用户指定的类型: <FINAL_OUTPUT>标签定义返回格式)，不要询问用户是否确认，不要重复调用相同的工具和相同参数。"
                     else:
                         effective_prompt = current_prompt
                 
@@ -435,9 +486,53 @@ class Agent:
                     continue
                 else:
                     # 获得了最终的聊天结果
-                    result["final_response"] = llm_response
-                    consecutive_tool_calls = 0  # 重置计数
-                    break
+                    should_accept = True
+                    review_feedback = None
+                    if review_condition:
+                        try:
+                            if callable(review_condition):
+                                review_output = review_condition({
+                                    "prompt": current_prompt,
+                                    "llm_response": llm_response,
+                                    "iteration": iteration,
+                                    "tool_calls": result["tool_calls"],
+                                })
+                                if isinstance(review_output, tuple):
+                                    should_accept, review_feedback = review_output
+                                else:
+                                    should_accept = bool(review_output)
+                            else:
+                                should_accept, review_feedback = self._run_auto_review(
+                                    llm_response,
+                                    prompt=current_prompt,
+                                    docs=docs,
+                                    parser=parser,
+                                    use_mcp=use_mcp,
+                                    llm_kwargs=kwargs,
+                                )
+                        except Exception as review_exc:
+                            should_accept = True
+                            review_feedback = f"自动审阅失败: {review_exc}"
+
+                    if should_accept:
+                        result["final_response"] = llm_response
+                        consecutive_tool_calls = 0  # 重置计数
+                        break
+
+                    # 审阅未通过，记录反馈并继续迭代
+                    result["tool_calls"].append({
+                        "name": "auto_review_feedback",
+                        "args": {
+                            "iteration": iteration,
+                            "feedback": review_feedback,
+                        },
+                        "result": "自动审阅未通过",
+                        "type": "review",
+                    })
+                    consecutive_tool_calls = 0
+                    force_final_answer = False
+                    final_answer_notice = ""
+                    continue
             
             # 添加助手回复到历史
             self._add_to_history(
@@ -471,6 +566,70 @@ class Agent:
         except Exception:
             pass
         return {}
+
+    def _sanitize_llm_kwargs(self, llm_kwargs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        sanitized = dict(llm_kwargs or {})
+        sanitized.pop("caller", None)
+        sanitized.pop("use_mcp", None)
+        sanitized.pop("parser", None)
+        sanitized.pop("docs", None)
+        return sanitized
+
+    def _run_auto_review(
+        self,
+        response: Any,
+        *,
+        prompt: str,
+        docs: Optional[List] = None,
+        parser: Optional[TemplateParser] = None,
+        use_mcp: bool = False,
+        llm_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        review_prompt = (
+            "你是一名严格的代码审阅助手，请判断候选回答是否满足原始需求。\n"
+            "=== 原始需求 ===\n"
+            f"{prompt}\n"
+            "=== 候选回答 ===\n"
+            f"{response}\n"
+            "请根据上述信息给出是否接受该回答，并严格按照指定输出格式返回。\n"
+        )
+        safe_kwargs = self._sanitize_llm_kwargs(llm_kwargs)
+        review_raw = self.llm.call(
+            review_prompt,
+            parser=self._auto_review_parser,
+            use_mcp=False,
+            **safe_kwargs,
+        )
+        return review_raw['data']['accept'],review_raw['data']['feedback']
+
+    async def _run_auto_review_async(
+        self,
+        response: Any,
+        *,
+        prompt: str,
+        docs: Optional[List] = None,
+        parser: Optional[TemplateParser] = None,
+        use_mcp: bool = False,
+        llm_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        review_prompt = (
+            "你是一名严格的代码审阅助手，请判断候选回答是否满足原始需求。\n"
+            "=== 原始需求 ===\n"
+            f"{prompt}\n"
+            "=== 候选回答 ===\n"
+            f"{response}\n"
+            "请根据上述信息给出是否接受该回答，并严格按照指定输出格式返回。\n"
+        )
+        safe_kwargs = self._sanitize_llm_kwargs(llm_kwargs)
+        review_raw = await self.llm.call_async(
+            review_prompt,
+            parser=self._auto_review_parser,
+            use_mcp=False,
+            **safe_kwargs,
+        )
+        return review_raw['data']['accept'],review_raw['data']['feedback']
+
+
     
     def _is_redundant_tool_pattern(self, tool_calls: List[Dict]) -> bool:
         """检测最近的工具调用是否出现重复模式。"""

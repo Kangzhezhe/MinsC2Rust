@@ -33,7 +33,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from config import get_output_dir, get_project_root, load_rust_output_dir
+from analyzer.config import get_output_dir, get_project_root, load_rust_output_dir
 from llm.llm import LLM
 from llm.template_parser.template_parser import TemplateParser
 
@@ -142,14 +142,14 @@ def _summarize_file(rel_path: Path, project_root: Path, analysis_data: Dict[str,
             declarations: List[str] = []
             others: List[str] = []
             for entry in items:
-                name = entry.get("name") or entry.get("text")
+                name = entry.get("name") or entry.get("full_declaration") or entry.get("full_definition")
                 if not name:
                     continue
                 entry_type = (entry.get("type") or "").lower()
-                if entry_type == "definition":
+                if entry_type == "function_definition":
                     if name not in definitions:
                         definitions.append(name)
-                elif entry_type == "declaration":
+                elif entry_type == "function_declaration":
                     if name not in declarations:
                         declarations.append(name)
                 else:
@@ -179,7 +179,7 @@ def _summarize_file(rel_path: Path, project_root: Path, analysis_data: Dict[str,
 
         names: List[str] = []
         for entry in items:
-            name = entry.get("name") or entry.get("text")
+            name = entry.get("name") or entry.get("full_declaration") or entry.get("full_definition")
             if not name:
                 continue
             if name not in names:

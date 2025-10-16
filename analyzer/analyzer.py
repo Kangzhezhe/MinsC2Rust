@@ -26,12 +26,18 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
-from typing import Dict, List, Optional, Tuple, Iterable, Set, Literal
+import sys
+from typing import Dict, List, Optional, Tuple, Iterable, Set, Literal, Union, Mapping, Any
 
 try:  # 兼容直接脚本执行
     from config import to_absolute_path
 except ImportError:  # pragma: no cover
     from .config import to_absolute_path
+
+try:
+    from .symbol_model import normalize_symbol_type
+except ImportError:  # pragma: no cover
+    from analyzer.symbol_model import normalize_symbol_type
 
 # 懒加载：仅当需要做 AST 解析时才导入（避免环境未装 tree_sitter 时影响其它功能）
 _SYMBOL_ANALYZER = None
@@ -194,8 +200,20 @@ class Analyzer:
                 for d in deps:
                     s = d.get("source", {})
                     t = d.get("target", {})
-                    s_key = f"{s.get('name')}:{s.get('type')}:{s.get('file')}"
-                    t_key = f"{t.get('name')}:{t.get('type')}:{t.get('file')}"
+
+                    s_name = s.get("name")
+                    s_type = normalize_symbol_type(s.get("type"))
+                    s_file = s.get("file")
+
+                    t_name = t.get("name")
+                    t_type = normalize_symbol_type(t.get("type"))
+                    t_file = t.get("file")
+
+                    if not (s_name and s_type and s_file and t_name and t_type and t_file):
+                        continue
+
+                    s_key = f"{s_name}:{s_type}:{s_file}"
+                    t_key = f"{t_name}:{t_type}:{t_file}"
                     occ = d.get("occurrence") or {}
                     edges.append(Edge(
                         source=s_key,
@@ -381,7 +399,7 @@ class Analyzer:
             body = ""
             for it in items:
                 if it.get("name") == sym.name:
-                    body = it.get("full_definition") or it.get("full_declaration") or it.get("text") or ""
+                    body = it.get("full_definition") or it.get("full_declaration") or ""
                     break
 
             if not body:
@@ -409,6 +427,28 @@ class Analyzer:
         except Exception:
             # 按需补充失败时静默忽略，保留已有能力
             return
+
+    def _find_symbol_entry(self, sym: SymbolRef) -> Optional[dict]:
+        file_data = self.analysis_data.get(sym.file_path) or {}
+        for item in file_data.get(sym.type, []) or []:
+            if item.get("name") == sym.name:
+                return item
+        return None
+
+    def _get_symbol_declaration(self, sym: SymbolRef) -> str:
+        entry = self._find_symbol_entry(sym)
+        if entry:
+            for key in ("full_declaration", "signature", "declaration", "text"):
+                value = entry.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        definition = self.extract_definition_text(sym).strip()
+        if definition:
+            for line in definition.splitlines():
+                stripped = line.strip()
+                if stripped:
+                    return stripped
+        return ""
 
     # ---------------------------- 拓扑辅助 ----------------------------
     def sort_by_topo(self, symbols: Iterable[SymbolRef]) -> List[SymbolRef]:
@@ -487,14 +527,16 @@ class Analyzer:
         assume_relative: bool = False,
         include_end_line: bool = True,
         encoding: str = "utf-8",
+        depth: Optional[int] = 1,
     ) -> List[str]:
         """
-        获取某个符号“入边、深度=1”的所有边对应的文本片段列表。
+        获取某个符号“入边、指定深度”范围内所有边对应的文本片段列表。
 
         - name_or_key: 可以是简单的符号名，或完整 key("name:type:file_path")。
         - symbol_type/file_path: 当传入的是简单符号名时用于锁定唯一符号。
         - assume_relative: True 表示边上的行号相对源符号起始行；False 表示为文件绝对行号（当前导出为绝对行号，推荐 False）。
         - include_end_line/encoding: 传递给 edge2text 的参数。
+        - depth: 递归向上遍历的层数，None 表示不限。
         返回：每条入边在其源文件中的代码片段（字符串）列表。
         """
         # 解析目标符号
@@ -509,18 +551,187 @@ class Analyzer:
         if not target_sym:
             return []
 
-        # 获取入边（深度=1）
-        _, edges = self.get_dependencies(target_sym, depth=1, direction="in")
-        print(f"Found {len(edges)} in-edges for {target_sym.key()}")
+        # 获取入边（指定深度）
+        nodes, edges = self.get_dependencies(target_sym, depth=depth, direction="in")
+        valid_targets = {s.key() for s in nodes}
+        # print(f"Found {len(edges)} in-edges within depth={depth} for {target_sym.key()}")
         snippets: List[str] = []
         for e in edges:
-            # 只保留真正以该符号为 target 的边
-            if e.target != target_sym.key():
+            # 只保留指向所遍历节点集合的边
+            if e.target not in valid_targets:
                 continue
             snippet = self.edge2text(e, lines_offset=lines_offset, assume_relative=assume_relative, include_end_line=include_end_line, encoding=encoding)
             if snippet:
                 snippets.append(snippet)
         return snippets
+
+    def get_batch_dependency_contexts(
+        self,
+        batch: Iterable[Union[str, Tuple[str, Optional[str], Optional[str]], SymbolRef, Mapping[str, object]]],
+        *,
+        lines_offset: int = 2,
+        assume_relative: bool = False,
+        include_end_line: bool = True,
+        encoding: str = "utf-8",
+        depth: Optional[int] = 1,
+        default_symbol_type: Optional[str] = None,
+        summary: bool = False,
+        max_size: int = 10000,
+    ) -> Union[Dict[str, Dict[str, Any]], str]:
+        """
+        批量获取符号的入边上下文片段。
+
+        参数：
+        - batch: 可迭代对象，元素可以是：
+            * ``SymbolRef`` 实例
+            * 符号 key（"name:type:file_path"）字符串
+            * ``(name, type, file_path)`` 元组（type/file_path 可省略或为 ``None``）
+            * 至少包含 ``name`` 或 ``key`` 字段的字典（可选 ``type``/``file_path``）
+        - depth: 同 ``get_in_edge_texts``，控制入边遍历深度。
+        - default_symbol_type: 当 batch 元素仅提供名称时用于补充的默认符号类型。
+    - summary: 为 True 时，使用 ``llm.LLM`` 对整个 batch 的上下文一次性生成摘要，并直接返回字符串结果。
+
+        返回：
+                - 当 ``summary`` 为 False 时，返回 dict，key 为解析出的符号 ``SymbolRef.key()``，value 为包含 ``snippets``（代码片段列表）的字典。
+                    若某个元素无法解析符号，则会在输出中以原输入的 ``str`` 形式记录，``snippets`` 为空列表。
+                - 当 ``summary`` 为 True 时，返回 LLM 生成的整体摘要字符串；若生成失败，则回退到简单拼接的串联文本。
+        """
+
+        contexts: Dict[str, Dict[str, Any]] = {}
+
+        for item in batch:
+            symbol: Optional[SymbolRef] = None
+            name_or_key: Optional[str] = None
+            symbol_type_hint: Optional[str] = default_symbol_type
+            file_path_hint: Optional[str] = None
+
+            if isinstance(item, SymbolRef):
+                symbol = item
+            elif isinstance(item, str):
+                name_or_key = item
+            elif isinstance(item, tuple):
+                if not item:
+                    continue
+                name_or_key = item[0]
+                if len(item) > 1 and item[1]:
+                    symbol_type_hint = item[1]  # type: ignore[assignment]
+                if len(item) > 2 and item[2]:
+                    file_path_hint = item[2]
+            elif isinstance(item, dict):
+                name_or_key = item.get("key") or item.get("name") or item.get("symbol")
+                symbol_type_hint = item.get("type") or item.get("symbol_type") or symbol_type_hint
+                file_path_hint = item.get("file_path") or item.get("file") or file_path_hint
+            else:
+                name_or_key = str(item)
+
+            if symbol_type_hint:
+                symbol_type_hint = normalize_symbol_type(symbol_type_hint)
+
+            if symbol is None:
+                if not name_or_key:
+                    contexts[str(item)] = {"snippets": []}
+                    continue
+
+                # 若提供的是完整 key，直接获取
+                if name_or_key in self._by_key:
+                    symbol = self._by_key[name_or_key]
+                else:
+                    # 尝试按名称解析
+                    cands = self.find_symbols_by_name(name_or_key, symbol_type_hint, file_path_hint)
+                    if not cands and symbol_type_hint is None:
+                        cands = self.find_symbols_by_name(name_or_key)
+                    symbol = cands[0] if cands else None
+
+            if symbol is None:
+                contexts[name_or_key or str(item)] = {"snippets": []}
+                continue
+
+            key = symbol.key()
+            if key in contexts:
+                continue
+
+            contexts[key] = {
+                "declaration": self._get_symbol_declaration(symbol),
+                "snippets": self.get_in_edge_texts(
+                    key,
+                    lines_offset=lines_offset,
+                    assume_relative=assume_relative,
+                    include_end_line=include_end_line,
+                    encoding=encoding,
+                    depth=depth,
+                )
+            }
+
+        if not summary:
+            return contexts
+
+        # 为整个 batch 构造上下文汇总
+        symbol_blocks: List[str] = []
+        for key, payload in contexts.items():
+            snippets = payload.get("snippets", [])
+            declaration_text = payload.get("declaration") or ""
+            decl_section = declaration_text.strip()
+            if not snippets:
+                continue
+            combined_snippet = "\n\n".join(snippets).strip()
+            if not combined_snippet:
+                continue
+            if max_size > 0 and len(combined_snippet) > max_size:
+                combined_snippet = combined_snippet[:max_size] + "..."
+            if decl_section:
+                block = f"符号 {key} :\n[声明]\n{decl_section}\n\n[引用片段]\n{combined_snippet}"
+            else:
+                block = f"符号 {key} :\n[声明]\n(未找到声明)\n\n[引用片段]\n{combined_snippet}"
+            symbol_blocks.append(block)
+
+        if not symbol_blocks:
+            return ""
+
+        aggregated_context = "\n\n".join(symbol_blocks)
+
+        try:
+            PROJECT_DIR = Path(__file__).resolve().parents[1]
+            if str(PROJECT_DIR) not in sys.path:
+                sys.path.insert(0, str(PROJECT_DIR))
+            from llm.llm import LLM  # 延迟导入，避免未配置环境时报错
+            llm_client = LLM(logger=True)
+        except Exception as exc:  # pragma: no cover - 仅在运行时环境缺失时触发
+            print(f"⚠️ 无法初始化 LLM，用于生成摘要：{exc}")
+            llm_client = None
+
+        if llm_client:
+            prompt = """
+请阅读以下符号的 C 代码上下文，它们包含真实的调用片段与依赖关系：
+{symbols}
+请重点提取：
+1. 每个符号的参数/返回值含义、依赖的宏或 typedef；
+2. 指出上下文中的调用示例（包含实参类型）；
+3. 针对涉及指针/引用/结构体字段的类型，说明所有权或借用关系（谁负责释放、是否共享等）。
+4. 对于 void * 等万能指针需说明它作为具体类型或是作为泛型用途，并解释所有权处理。
+
+限制：
+- 只讨论列表内的符号；完整输出所有列出的符号，不要省略；
+- 如无足够信息，明确写出“未知”；不要猜测；
+- 对于结构体，说出每一个字段的所有权/借用提示，对于函数，给出其对传入的参数的所有权/借用提示。
+- 输出格式为分条列出，每条结构为：
+  符号 {{key}}:
+    - 语义摘要: ...
+    - 关键依赖: ...
+    - 相关调用示例(列举3条左右): ...
+        - 所有权/借用提示: ...
+  若缺项请写“无”。
+""".format(symbols=", ".join(contexts.keys()))
+            prompt = f"{prompt}\n\n<上下文集合>\n{aggregated_context}\n</上下文集合>"
+            try:
+                summary_text = llm_client.call(prompt)
+                if isinstance(summary_text, dict):
+                    summary_text = summary_text.get("llm_output") or summary_text.get("summary") or ""
+                return str(summary_text).strip()
+            except Exception as exc:  # pragma: no cover
+                print(f"⚠️ 生成 batch 摘要失败：{exc}")
+
+        # 无法调用 LLM 时回退到直接返回拼接内容
+        return aggregated_context
 
     # ---------------------------- 便捷演示 ----------------------------
     def demo_lookup(self, name: str) -> None:
@@ -569,6 +780,7 @@ if __name__ == "__main__":
     # 轻量自检（不会触发 AST）
     az = Analyzer()
     # az.demo_lookup("Queue")
-    az.demo_get_dependencies("int_compare")
-    # output = az.get_in_edge_texts("int_compare")
-    # print(output)
+    # az.demo_get_dependencies("int_compare")
+    # output = az.get_in_edge_texts("ListEntry",depth=2)
+    output = az.get_batch_dependency_contexts(["_ListEntry"], depth=1,summary=True)
+    print(output)

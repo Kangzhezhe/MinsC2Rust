@@ -108,9 +108,9 @@ class SWEFileSystemTools:
         # self.bind_llm(LLM(model=ChatOpenAI(
         #         base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
         #         api_key= 'sk-438a9f4316fe4856a96d2c529de0404f',
-        #         model='qwen2.5-7b-instruct-1m',
+        #         model='deepseek-v3',
         #         temperature=0,
-        #     )))
+        #     ),logger=True))
 
         if self.placeholder_merge_model is None:
             self.placeholder_merge_model = llm_default_model
@@ -647,12 +647,12 @@ class SWEFileSystemTools:
         max_bytes: int = 64_000,
         info: str = ""
     ) -> Dict[str, Any]:
-        """读取文件内容，可选行范围截取。在使用edit_file前，必须先读取文件内容。
-
+        """读取文件内容。
         返回信息包含：
         - ``path``：相对工作区根目录的路径；
         - ``content``：读取到的文本内容（可能被截断）；
-        - ``start_line`` / ``end_line``：必须提供当前片段在文件中的行号范围。行以1开始计数。注意：为了提供充足的上下文，请求的行范围应包含目标编辑位置的前后若干行。
+        - ``start_line`` / ``end_line``：必须提供当前片段在文件中的行号范围，每次读取的行数。行以1开始计数。
+        注意：为了提供充足的上下文，请求的行范围应尽可能大和全面（行数大于100），如果你发现一次读取的内容不全，可以调整行号再次读取。
         """
         target = self._resolve_path(path)
         if target.is_dir():
@@ -981,24 +981,27 @@ class SWEFileSystemTools:
     ) -> str:
         llm = self._get_llm_for_model(model)
 
+
         prompt = textwrap.dedent(
             f"""
             你是一名代码合并助手。
-            请使用提供的原始文件、上下文片段<CONTEXT_SNIPPET>以及包含占位符的编辑脚本<PLACEHOLDER_EDIT>，生成目标片段的最终内容。
-            特别注意：生成片段的开头与结尾字符必须与CONTEXT_SNIPPET的开头结尾完全一致。
-            编辑脚本格式：existing code 表示省略的未修改代码，采用类似与diff的格式：未修改的上下文行原样保留；新增行前加 `+`；- 删除行前加 `-`；
+            请使用提供的原始文件、上下文片段 <CONTEXT_SNIPPET> 以及仅包含占位符的编辑脚本 <PLACEHOLDER_EDIT>，生成目标片段的最终内容。
+            特别注意：生成片段的开头与结尾字符必须与 <CONTEXT_SNIPPET> 的开头结尾完全一致，不允许新增、删除或调换任何额外字符（包括空格、换行、括号等）。
+            比如说，CONTEXT_SNIPPET 是不完整的函数片段 `int add(int a, int b) {{ return a + b;`，那你生成的新片段也必须精确地从 `int` 开始，到 `+ b;` 结束，中间任何字符（包括空格、换行）都不能多也不能少（比如不要添加缺少的 `}}` ），否则就违反了这条要求。
 
-            你是一个为代码编辑器提供帮助的助手，负责将编辑内容应用到代码上并进行合并。你会收到用 <CONTEXT_SNIPPET> 标签包裹的代码和用 <PLACEHOLDER_EDIT> 标签包裹的编辑内容，你需要将编辑内容应用到代码中。
 
-例如：
-代码可以是任何类型，编辑内容的格式如下：
-// ... existing code ... 
-第一处编辑 
-// ... existing code ... 
-第二处编辑 
-// ... existing code ... 
+            编辑脚本格式：使用 `// ... existing code ...` 表示未修改的连续上下文；在两个占位符之间写入最终应出现的代码。
+            你需要把 <PLACEHOLDER_EDIT> 中的内容套入 <CONTEXT_SNIPPET>，输出编辑后的完整片段，同时保持未修改部分与原始片段逐字符一致。
 
-合并后的代码必须完全正确，不能有任何错误。请确保所有空白字符都被正确保留。代码中哪怕有一个小的拼写错误，都会导致编译失败或出错，从而影响用户体验。
+示例格式：
+<EDIT>
+// ... existing code ...
+    println!("hello, world");
+    return;
+// ... existing code ...
+</EDIT>
+
+合并后的代码必须完全正确，不允许有任何漏改或多改。请确保所有空白字符保持不变，任何细微拼写错误都会导致编译失败或运行异常。
 
 
 ### 上下文目标片段
@@ -1016,7 +1019,7 @@ class SWEFileSystemTools:
 {edit_script}
 </PLACEHOLDER_EDIT>
 
-            请直接输出该目标片段的最终版本，使用以下格式：
+            请直接输出目标片段的最终版本，不要添加解释或额外文本。
             """
         )
 
@@ -1070,35 +1073,36 @@ class SWEFileSystemTools:
             return "(无改动)"
         return "\n".join(cleaned) + "\n" +"如果你发现生成的diff并不是你期望的更改，使用reapply 工具让更智能的模型基于同一段上下文和指令重新生成补丁。"
 
+
     def edit_file(self, target_file: str, context_start_line:int, context_end_line:int, instructions: str, code_edit: str) -> Dict[str, Any]:
-        """用于创建或更新单个文件，在调用该工具前一个工具必须一定通过 read_file 读取待修改的同一文件片段，保证查看文件的足够内容以确认文件将进行的修改。
-            - `instructions` 必须由第一人称一句话组成，用来明确你打算进行的修改，如“我将更新处理函数以记录错误”。保持简短有助于下游模型正确理解意图。
-            - (required) `context_start_line` 和 `context_end_line` 必须给定确定的范围 必须大于最近几次同文件 read_file 返回的行号范围，如果该范围太大（超过500），则分多次编辑，表示当前编辑内容在文件中的位置。
-            - 采用类似与diff的格式：未修改的上下文行原样保留；新增行前加 `+`；- 删除行前加 `-`；
-            - 在 `code_edit` 中提供完整编辑内容，写法如下：
-            - **片段编辑**：未修改文本使用 `// ... existing code ...` 或 `# ... existing code ...` 之类的占位行划分片段。每个占位符表示原文件中未改动的部分应原样保留。
-            - **上下文定位**：这个code_edit 会传给一个下游小模型应用更改，需要修改的文本周围请提供足够的上下文（unchanged_context :额外的上下文至少3行）以便唯一定位每段修改。
+        """用于创建或更新单个文件。在调用该工具前，必须通过 `read_file` 读取同一文件的目标片段，以确保拥有完整上下文，并尽量在一次操作中完成该片段的全部修改。
+                - `instructions` 需由第一人称的一句话组成，用来说明本次修改意图（例如“我会在 foo 函数中补全错误处理”）。
+                - `context_start_line` 与 `context_end_line` 必须覆盖最近几次 `read_file` 返回的行号范围；`code_edit` 中引用的所有上下文行都不能超出该闭区间。如果修改的行号范围太大，大于300，则分多次修改，但是每一次的修改范围都尽可能大。
+                - `code_edit` 只允许使用占位符方式描述修改：用 `// ... existing code ...` 标记未改动的上下文块，在任意两段占位符之间写入需要保留或替换的最终代码。
+                - 对于插入或替换，请在前后提供足够的原始上下文（建议不少于 3 行），并直接写出修改后的完整代码片段；删除操作通过保留前后占位符、直接省略目标行实现。
 
-例如：如果你需要修改两个函数 add/sub，确保在函数定义前后各保留至少 3 行未改动的代码。
+示例（在 `print` 后插入一行日志）：
+<EDIT>
 // ... existing code ...
-fn add(a: i32, b: i32) -> i32 {
--    let sum = a + b;
--    sum
-+    a + b
-}
-fn mul(a: i32, b: i32) -> i32 {
+        print!("hello");
+        log::info!("done");
 // ... existing code ...
-fn sub(a: i32, b: i32) -> i32 {
--    let diff = a - b
-+    let diff = a - b;
-    diff
-}
-// ... existing code ...
+</EDIT>
 
-            - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
-            - **reapply**: 如果你发现生成的diff并不是期望的，让更智能的模型基于同一段上下文和指令重新生成补丁。
+示例（替换某段逻辑）：
+<EDIT>
+// ... existing code ...
+        let value = compute();
+        if value.is_err() {
+                return Err(value.unwrap_err());
+        }
+// ... existing code ...
+</EDIT>
+
+“<EDIT>…</EDIT>” 标签用于帮助下游模型定位编辑脚本，实际调用时只需提供上述格式的内容。
+- 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
 """
-        MAX_EDIT_FILE_LENGTH = 500
+        MAX_EDIT_FILE_LENGTH = 300
         if not instructions or not instructions.strip():
             raise SWEAgentToolError("instructions 不能为空")
         if not code_edit or not code_edit.strip():
@@ -1118,7 +1122,7 @@ fn sub(a: i32, b: i32) -> i32 {
                     path=target_file,
                     start_line=context_start_line,
                     end_line=context_end_line,
-                    info="在调用 edit_file 之前，请先使用 read_file 读取待修改的同一文件片段，以下是 read_file 的返回结果，请重新调用 edit_file。",
+                    info="请先调用 read_file 获取同一文件片段；以下是 read_file 的返回内容，请重新尝试 edit_file。",
                 )
                 # raise SWEAgentToolError(
                 #     "在调用 edit_file 之前，请先使用 read_file 读取待修改的同一文件片段。"
@@ -2730,57 +2734,195 @@ class SWELspTools:
     # ------------------------------------------------------------------
     # 对外工具接口
     # ------------------------------------------------------------------
+    def lsp_list_document_symbols(
+        self,
+        filePath: str,
+        *,
+        include_children: bool = False,
+    ) -> Dict[str, Any]:
+        """返回指定文件的 LSP 符号信息和行号；默认仅包含最外层符号，include_children=True 时递归展开所有子符号。"""
+
+        path_input = (filePath or "").strip()
+        if not path_input:
+            raise SWEAgentToolError("filePath 不能为空")
+
+        resolved = self._resolve_path(path_input)
+        if not resolved.is_file():
+            raise SWEAgentToolError(f"{self._relative_to_root(resolved)}: 不是有效的文件")
+
+        rel_path = self._relative_to_root(resolved)
+        language = self._detect_language_for_path(resolved)
+        if not language:
+            raise SWEAgentToolError(f"{rel_path}: 暂不支持的文件类型")
+
+        try:
+            session = self._ensure_session(language)
+        except SWEAgentToolError as exc:
+            raise SWEAgentToolError(f"{rel_path}: {exc}") from exc
+
+        uri = resolved.as_uri()
+        try:
+            self._ensure_document_open(session, resolved, uri=uri)
+        except SWEAgentToolError as exc:
+            raise SWEAgentToolError(f"{rel_path}: {exc}") from exc
+
+        try:
+            raw_symbols = session.client.documentSymbol(TextDocumentIdentifier(uri=uri))
+        except Exception as exc:  # pragma: no cover - 取决于语言服务器实现
+            raise SWEAgentToolError(f"{rel_path}: documentSymbol 调用失败: {exc}") from exc
+
+        def kind_name(value: Any) -> Optional[str]:
+            if isinstance(value, SymbolKind):
+                return value.name
+            try:
+                return SymbolKind(int(value)).name
+            except Exception:
+                return str(value) if value is not None else None
+
+        def build_document_entry(symbol: DocumentSymbol, container: Optional[str]) -> Dict[str, Any]:
+            start = symbol.range.start
+            end = symbol.range.end
+            selection = symbol.selectionRange or symbol.range
+            entry: Dict[str, Any] = {
+                "name": symbol.name,
+                "kind": kind_name(symbol.kind),
+                "start_line": start.line + 1,
+                "end_line": end.line + 1,
+                "selection_start_line": selection.start.line + 1,
+                "selection_end_line": selection.end.line + 1,
+            }
+            if symbol.detail:
+                entry["detail"] = symbol.detail
+            if container:
+                entry["container"] = container
+            return entry
+
+        def visit_document_symbol(symbol: DocumentSymbol, container: Optional[str]) -> None:
+            entry = build_document_entry(symbol, container)
+            symbols.append(entry)
+            if include_children:
+                for child in symbol.children or []:
+                    visit_document_symbol(child, symbol.name or container)
+
+        def append_symbol_information(item: Union[SymbolInformation, Dict[str, Any]]) -> None:
+            symbol = item if isinstance(item, SymbolInformation) else SymbolInformation.model_validate(item)
+            if not include_children and symbol.containerName:
+                return
+            start = symbol.location.range.start
+            end = symbol.location.range.end
+            entry: Dict[str, Any] = {
+                "name": symbol.name,
+                "kind": kind_name(symbol.kind),
+                "start_line": start.line + 1,
+                "end_line": end.line + 1,
+            }
+            if symbol.containerName:
+                entry["container"] = symbol.containerName
+            symbols.append(entry)
+
+        symbols: List[Dict[str, Any]] = []
+        if raw_symbols:
+            parsed_document_symbols: List[DocumentSymbol] = []
+            parsed_symbol_infos: List[SymbolInformation] = []
+
+            for item in raw_symbols:
+                try:
+                    parsed_document_symbols.append(
+                        item if isinstance(item, DocumentSymbol) else DocumentSymbol.model_validate(item)
+                    )
+                except ValidationError:
+                    try:
+                        parsed_symbol_infos.append(
+                            item if isinstance(item, SymbolInformation) else SymbolInformation.model_validate(item)
+                        )
+                    except ValidationError:
+                        continue
+
+            if parsed_document_symbols:
+                for node in parsed_document_symbols:
+                    visit_document_symbol(node, None)
+                if not include_children:
+                    # 仅保留顶层符号：移除递归时追加的条目
+                    symbols[:] = symbols[: len(parsed_document_symbols)]
+            elif parsed_symbol_infos:
+                for info in parsed_symbol_infos:
+                    append_symbol_information(info)
+
+        return {
+            "tool": "lsp_list_document_symbols",
+            "file": rel_path,
+            "language": language,
+            "symbols": symbols,
+        }
+
     def lsp_list_symbol_definitions(
         self,
-        symbolName: str,
+        symbolName: Union[str, Sequence[str]],
         filePaths: Optional[List[str]] = None,
         include_definition_text: bool = False,
     ) -> Dict[str, Any]:
-        symbol = (symbolName or "").strip()
-        if not symbol:
+        """列出一个或多个符号的定义；支持传入单个字符串或字符串序列。filePaths 可选限定搜索路径，include_definition_text 为 True 时附带源码片段。"""
+
+        if isinstance(symbolName, str):
+            raw_symbols = [symbolName]
+        else:
+            raw_symbols = list(symbolName)
+
+        symbols = [s.strip() for s in raw_symbols if isinstance(s, str) and s.strip()]
+        if not symbols:
             raise SWEAgentToolError("symbolName 不能为空")
 
         matches_path, normalized_filters = self._build_path_filter(filePaths)
-        candidate_languages = self._detect_languages_for_symbol(symbol, normalized_filters)
-        locations, errors = self._collect_symbol_locations(symbol, matches_path, candidate_languages)
 
-        if not locations:
+        grouped_definitions: List[Dict[str, Any]] = []
+        aggregated_warnings: List[str] = []
+
+        for symbol in symbols:
+            candidate_languages = self._detect_languages_for_symbol(symbol, normalized_filters)
+            locations, errors = self._collect_symbol_locations(symbol, matches_path, candidate_languages)
+
+            if not locations:
+                warning = "; ".join(errors) if errors else f"未找到符号: {symbol}"
+                aggregated_warnings.append(warning)
+                continue
+
+            for loc in locations:
+                start = loc.location.range.start
+                end = loc.location.range.end
+                entry: Dict[str, Any] = {
+                    "symbol": loc.name,
+                    "file": loc.rel_path,
+                    "start_line": start.line + 1,
+                    "end_line": end.line + 1,
+                    "language": loc.language,
+                    "symbol_kind": self._symbol_kind_name(loc.kind),
+                    "container": loc.container,
+                }
+                if include_definition_text:
+                    snippet = self._extract_snippet(
+                        loc.abs_path,
+                        start.line,
+                        end.line,
+                        include_end_line=True,
+                    )
+                    entry["definition"] = snippet
+                grouped_definitions.append(entry)
+
             if errors:
-                raise SWEAgentToolError("; ".join(errors))
-            raise SWEAgentToolError(f"未找到符号: {symbol}")
+                aggregated_warnings.extend(errors)
 
-        definitions: List[Dict[str, Any]] = []
-        for loc in locations:
-            start = loc.location.range.start
-            end = loc.location.range.end
-            entry: Dict[str, Any] = {
-                "file": loc.rel_path,
-                "start_line": start.line + 1,
-                "end_line": end.line + 1,
-                "language": loc.language,
-                "symbol": loc.name,
-                "symbol_kind": self._symbol_kind_name(loc.kind),
-                "container": loc.container,
-            }
-            if include_definition_text:
-                snippet = self._extract_snippet(
-                    loc.abs_path,
-                    start.line,
-                    end.line,
-                    include_end_line=True,
-                )
-                entry["definition"] = snippet
-            definitions.append(entry)
+        if not grouped_definitions and aggregated_warnings:
+            raise SWEAgentToolError("; ".join(dict.fromkeys(aggregated_warnings)))
 
         result: Dict[str, Any] = {
             "tool": "lsp_list_symbol_definitions",
-            "symbol": symbol,
-            "definitions": definitions,
+            "symbols": symbols,
+            "definitions": grouped_definitions,
             "filters": normalized_filters,
             "include_definition_text": include_definition_text,
         }
-        if errors:
-            result["warnings"] = errors
+        if aggregated_warnings:
+            result["warnings"] = list(dict.fromkeys(aggregated_warnings))
         return result
 
     def lsp_list_symbol_usages(
@@ -2788,8 +2930,9 @@ class SWELspTools:
         symbolName: str,
         max_results: int,
         filePaths: Optional[List[str]] = None,
-        include_end_line: bool = True,
     ) -> Dict[str, Any]:
+        """查询符号引用；symbolName 为目标符号，max_results 限制返回条数，filePaths 可选限定范围。"""
+        include_end_line = True
         symbol = (symbolName or "").strip()
         if not symbol:
             raise SWEAgentToolError("symbolName 不能为空")
@@ -3072,7 +3215,6 @@ class SWEAgent(Agent):
             self.toolset.file_exists,
             self.toolset.read_file,
             self.toolset.write_file,
-            # self.toolset.append_file,
             self.toolset.grep_search,
             self.toolset.search_replace,
             self.toolset.run_command,
@@ -3087,8 +3229,9 @@ class SWEAgent(Agent):
         if self.lsp_toolset is not None:
             tools.extend(
                 [
-                    # self.lsp_toolset.lsp_list_symbol_definitions,
-                    # self.lsp_toolset.lsp_list_symbol_usages,
+                    self.lsp_toolset.lsp_list_document_symbols,
+                    self.lsp_toolset.lsp_list_symbol_definitions,
+                    self.lsp_toolset.lsp_list_symbol_usages,
                     self.lsp_toolset.lsp_get_errors,
                 ]
             )
@@ -3115,12 +3258,14 @@ class SWEAgent(Agent):
         if extra_notes:
             sections.append(f"### 额外说明\n{extra_notes.strip()}")
 
-        sections.append(
-            "### 输出格式\n"
-            "- 总结解决方案与关键修改\n"
-            "- 列出被修改的文件及理由\n"
-            "- 说明执行过的测试命令及结果"
-        )
+        # sections.append(
+        #     "### 输出格式\n"
+        #     "- 总结解决方案与关键修改\n"
+        #     "- 列出被修改的文件及理由\n"
+        #     "- 说明执行过的测试命令及结果\n"
+        #     "- 注意：最后的输出应该是对已经完成任务的完整总结，而不是简单的行动列表，不要遗漏或者编造/预测重要信息。\n"
+        #     "- 不要包含后续建议，如果验收标准未完成，请说明原因。\n"
+        # )
         return "\n\n".join(section.strip() for section in sections if section)
 
     def run_task(
@@ -3131,6 +3276,7 @@ class SWEAgent(Agent):
         repo_context: Optional[str] = None,
         extra_notes: Optional[str] = None,
         use_tools: bool = True,
+        review_condition: Optional[Union[Callable[[Any, Dict[str, Any]], Any], bool]] = False,
         **chat_kwargs: Any,
     ) -> Dict[str, Any]:
         """执行SWE任务，返回Agent的执行结果。"""
@@ -3140,7 +3286,7 @@ class SWEAgent(Agent):
             repo_context=repo_context,
             extra_notes=extra_notes,
         )
-        return self.chat(prompt, use_tools=use_tools, **chat_kwargs)
+        return self.chat(prompt, use_tools=use_tools, review_condition=review_condition, **chat_kwargs)
 
     def available_tool_names(self) -> List[str]:
         """获取当前注册的工具名称列表。"""

@@ -138,8 +138,7 @@ def demonstrate_errors_fix(agent: SWEAgent, max_rounds: int = 5) -> None:
         task_description,
         acceptance_criteria=[
             "使用lsp获得所有编译错误",
-            "强制用 edit_file 工具修改部分代码片段的方式修复编译错误",
-            "修改完之后再次确认，确保所有代码可以编译通过",
+            "修改完之后强制再次确认所有文件的编译是否有错误，确保所有代码可以编译通过",
         ],
     )
 

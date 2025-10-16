@@ -193,8 +193,7 @@ class CProjectReconstructor:
                     'type': 'variable',
                     'start_byte': var['start_byte'],
                     'end_byte': var['end_byte'],
-                    'content': var.get('full_declaration', ''),
-                    'text': var['text']
+                    'content': var.get('full_declaration', '')
                 })
         
         # 按位置排序
@@ -243,81 +242,46 @@ class CProjectReconstructor:
         all_elements = []
         
         # 添加所有类型的元素到统一列表中
+        def add_element(elem_type, symbol, content):
+            line_no = symbol.get('start_line') or symbol.get('line')
+            if not line_no or not content:
+                return
+            all_elements.append({
+                'type': elem_type,
+                'line': line_no,
+                'content': content,
+                'data': symbol
+            })
+
         for include in includes:
-            if 'line' in include:
-                all_elements.append({
-                    'type': 'include',
-                    'line': include['line'],
-                    'content': include['text'],
-                    'data': include
-                })
-        
+            add_element('include', include, include.get('full_declaration', ''))
+
         for macro in macros:
-            if 'line' in macro:
-                all_elements.append({
-                    'type': 'macro',
-                    'line': macro['line'],
-                    'content': macro['text'],
-                    'data': macro
-                })
-        
+            macro_text = macro.get('full_definition') or macro.get('full_declaration', '')
+            add_element('macro', macro, macro_text)
+
         for enum in enums:
-            if 'start_line' in enum:
-                enum_def = enum.get('full_definition', enum.get('text', f'enum {enum.get("name", "")}'))
-                # 确保枚举定义以分号结尾
-                if enum_def and not enum_def.rstrip().endswith(';'):
-                    enum_def = enum_def.rstrip() + ';'
-                all_elements.append({
-                    'type': 'enum',
-                    'line': enum['start_line'],
-                    'content': enum_def,
-                    'data': enum
-                })
-        
+            enum_def = enum.get('full_definition') or enum.get('full_declaration', '')
+            if enum_def and not enum_def.rstrip().endswith(';'):
+                enum_def = enum_def.rstrip() + ';'
+            add_element('enum', enum, enum_def)
+
         for typedef in typedefs:
-            if 'line' in typedef:
-                all_elements.append({
-                    'type': 'typedef',
-                    'line': typedef['line'],
-                    'content': typedef['text'],
-                    'data': typedef
-                })
-        
+            add_element('typedef', typedef, typedef.get('full_declaration', ''))
+
         for var in variables:
-            if 'line' in var:
-                all_elements.append({
-                    'type': 'variable',
-                    'line': var['line'],
-                    'content': var['text'],
-                    'data': var
-                })
-        
+            add_element('variable', var, var.get('full_declaration', ''))
+
         for struct in structs:
-            if 'start_line' in struct and struct.get('full_definition'):
-                struct_def = struct.get('full_definition', '')
-                # 确保结构体定义以分号结尾
-                if struct_def and not struct_def.strip().endswith(';'):
-                    struct_def += ';'
-                all_elements.append({
-                    'type': 'struct',
-                    'line': struct['start_line'],
-                    'content': struct_def,
-                    'data': struct
-                })
-        
+            struct_def = struct.get('full_definition', '')
+            if struct_def and not struct_def.strip().endswith(';'):
+                struct_def = struct_def.rstrip() + ';'
+            add_element('struct', struct, struct_def)
+
         # 处理函数声明和定义
         for func in functions:
-            if 'start_line' in func:
-                # 使用函数声明或定义
-                # content = func.get('full_definition') or func.get('full_declaration', '')
-                content = func.get('signature', '')
-                if content:
-                    all_elements.append({
-                        'type': 'function',
-                        'line': func['start_line'],
-                        'content': content,
-                        'data': func
-                    })
+            func_text = func.get('full_definition') or func.get('full_declaration', '')
+            add_element('function', func, func_text)
         
         # 按行号排序，去除重复
         all_elements.sort(key=lambda x: x['line'])

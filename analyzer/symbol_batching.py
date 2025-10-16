@@ -31,8 +31,10 @@ from pathlib import Path
 
 try:  # 兼容脚本直接执行与包内导入
     from config import get_output_dir
+    from symbol_model import SymbolModel
 except ImportError:  # pragma: no cover
     from .config import get_output_dir
+    from .symbol_model import SymbolModel
 
 _DEFAULT_OUTPUT_DIR = get_output_dir()
 
@@ -58,20 +60,12 @@ def load_file_analysis(analysis_path: str) -> Dict[str, Dict]:
         categories = ['typedefs', 'structs', 'enums', 'macros', 'functions', 'variables']
         for category in categories:
             for symbol in file_data.get(category, []):
-                name = symbol.get('name')
-                if name:
-                    content = symbol.get('content', '') or symbol.get('text', '') or symbol.get('signature','') or symbol.get('full_declaration','')
-                    # content = symbol.get('content', '') or symbol.get('text', '') or symbol.get('full_definition','')
-                    symbol_info = {
-                        'name': name,
-                        'type': category,
-                        'start_line': symbol.get('start_line', 0),
-                        'end_line': symbol.get('end_line', 0),
-                        'content': content,
-                        'size_chars': len(content)
-                    }
-                    file_symbols.append(symbol_info)
-                    total_chars += len(content)
+                model = SymbolModel.from_dict(symbol)
+                if not model.name:
+                    continue
+                content = model.primary_text
+                total_chars += len(content)
+                file_symbols.append(model.to_dict())
         
         files[file_path] = {
             'file_path': file_path,
@@ -155,6 +149,21 @@ def _dep_key(entry: Dict) -> Optional[Tuple[str, str]]:
     if not name:
         return None
     return (name, sym_type or '')
+
+
+def _symbol_text(symbol: Dict) -> str:
+    """提取符号的主体文本，优先完整定义，其次声明。"""
+    return (symbol.get('full_definition') or
+            symbol.get('full_declaration') or
+            "")
+
+
+def _symbol_char_count(symbol: Dict) -> int:
+    text = _symbol_text(symbol)
+    if text:
+        return len(text)
+    name = symbol.get('name', '')
+    return len(name)
 
 
 def reorder_symbols_by_dependencies(symbols: List[Dict], deps: List[Dict]) -> List[Dict]:
@@ -294,15 +303,9 @@ def create_file_batches(ordered_files: List[str],
                             
                             # 添加符号信息
                             for symbol in files[cycle_file]['symbols']:
-                                batch['symbols'].append({
-                                    'name': symbol['name'],
-                                    'type': symbol['type'],
-                                    'file_path': cycle_file,
-                                    'start_line': symbol['start_line'],
-                                    'end_line': symbol['end_line'],
-                                    'content': symbol['content'],
-                                    'size_chars': symbol['size_chars']
-                                })
+                                symbol_entry = symbol.copy()
+                                symbol_entry['file_path'] = cycle_file
+                                batch['symbols'].append(symbol_entry)
                             
                             batches.append(batch)
                 else:
@@ -325,15 +328,9 @@ def create_file_batches(ordered_files: List[str],
                 
                 # 添加符号信息
                 for symbol in file_info['symbols']:
-                    batch['symbols'].append({
-                        'name': symbol['name'],
-                        'type': symbol['type'],
-                        'file_path': file_path,
-                        'start_line': symbol['start_line'],
-                        'end_line': symbol['end_line'],
-                        'content': symbol['content'],
-                        'size_chars': symbol['size_chars']
-                    })
+                    symbol_entry = symbol.copy()
+                    symbol_entry['file_path'] = file_path
+                    batch['symbols'].append(symbol_entry)
                 
                 batches.append(batch)
     
@@ -388,7 +385,7 @@ def create_batches_from_file_groups_with_cycles(file_groups: Dict[str, List[Tupl
         while i < len(symbol_list):
             name, depth = symbol_list[i]
             symbol_info = symbols.get(name, {})
-            char_count = symbol_info.get('size_chars', len(name))
+            char_count = _symbol_char_count(symbol_info)
             
             # 检查是否属于循环组
             if name in symbol_to_cycle_group:
@@ -402,7 +399,7 @@ def create_batches_from_file_groups_with_cycles(file_groups: Dict[str, List[Tupl
                     other_name, other_depth = symbol_list[j]
                     if other_name in cycle_group:
                         other_info = symbols.get(other_name, {})
-                        other_char_count = other_info.get('size_chars', len(other_name))
+                        other_char_count = _symbol_char_count(other_info)
                         group_char_count += other_char_count
                         group_symbols.append((j, other_name, other_depth, other_char_count, other_info))
                 
@@ -430,11 +427,13 @@ def create_batches_from_file_groups_with_cycles(file_groups: Dict[str, List[Tupl
                         'depth': other_depth,
                         'char_count': other_char_count,
                         'type': other_info.get('type', 'unknown'),
-                        'content': other_info.get('content', ''),
                         'start_line': other_info.get('start_line', 0),
                         'end_line': other_info.get('end_line', 0),
                         'file_path': other_info.get('file_path', '<unknown>'),
-                        'cycle_group_id': group_id
+                        'cycle_group_id': group_id,
+                        'full_declaration': other_info.get('full_declaration', ''),
+                        'full_definition': other_info.get('full_definition', ''),
+                        'comment': other_info.get('comment', ''),
                     })
                     current_batch['total_chars'] += other_char_count
                     current_batch['min_depth'] = min(current_batch['min_depth'], other_depth)
@@ -477,10 +476,12 @@ def create_batches_from_file_groups_with_cycles(file_groups: Dict[str, List[Tupl
                 'depth': depth,
                 'char_count': char_count,
                 'type': symbol_info.get('type', 'unknown'),
-                'content': symbol_info.get('content', ''),
                 'start_line': symbol_info.get('start_line', 0),
                 'end_line': symbol_info.get('end_line', 0),
-                'file_path': symbol_info.get('file_path', '<unknown>')
+                'file_path': symbol_info.get('file_path', '<unknown>'),
+                'full_declaration': symbol_info.get('full_declaration', ''),
+                'full_definition': symbol_info.get('full_definition', ''),
+                'comment': symbol_info.get('comment', ''),
             })
             current_batch['total_chars'] += char_count
             current_batch['min_depth'] = min(current_batch['min_depth'], depth)
@@ -515,7 +516,7 @@ def create_batches_from_file_groups(file_groups: Dict[str, List[Tuple[str, int]]
         
         for name, depth in symbol_list:
             symbol_info = symbols.get(name, {})
-            char_count = symbol_info.get('size_chars', len(name))  # 如果没有内容，至少算符号名长度
+            char_count = _symbol_char_count(symbol_info)  # 如果没有内容，至少算符号名长度
             
             # 检查是否需要开始新批次
             if (current_batch['symbols'] and 
@@ -539,10 +540,12 @@ def create_batches_from_file_groups(file_groups: Dict[str, List[Tuple[str, int]]
                 'depth': depth,
                 'char_count': char_count,
                 'type': symbol_info.get('type', 'unknown'),
-                'content': symbol_info.get('content', ''),
                 'start_line': symbol_info.get('start_line', 0),
                 'end_line': symbol_info.get('end_line', 0),
-                'file_path': symbol_info.get('file_path', '<unknown>')
+                'file_path': symbol_info.get('file_path', '<unknown>'),
+                'full_declaration': symbol_info.get('full_declaration', ''),
+                'full_definition': symbol_info.get('full_definition', ''),
+                'comment': symbol_info.get('comment', ''),
             })
             current_batch['total_chars'] += char_count
             current_batch['min_depth'] = min(current_batch['min_depth'], depth)

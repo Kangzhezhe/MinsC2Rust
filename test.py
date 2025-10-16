@@ -1,10 +1,13 @@
 import atexit
+from functools import partial
 import json
 import os
+import re
 import shlex
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, TypedDict
+import subprocess
+from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, StateGraph  # type: ignore
 from pydantic import BaseModel, Field
@@ -14,20 +17,19 @@ from llm.llm import LLM
 from llm.rag import build_csv_mapping_collection, search_knowledge_base
 from analyzer.analyzer import Analyzer
 from analyzer.config import get_project_root, load_rust_output_dir
+from analyzer.symbol_model import SymbolModel, normalize_symbol_type
 
 
 class RustItem(BaseModel):
-    """单个 Rust 元素（name + 完整源码）。"""
+    """单个 Rust 元素（name + 完整源码 + 备注）。"""
 
-    # 生成的 Rust 元素名称（例如类型/结构体/函数/常量名）
     name: str = Field(..., description="Rust 元素名（类型/结构体/函数/常量等）")
-    # 该元素的完整 Rust 源码
     code: str = Field(..., description="该元素的完整 Rust 源码")
+    note: Optional[str] = Field(..., description="一句话描述该元素对应的转换/映射/删除说明，比如：为什么要转换/映射/删除。")
 
-    # 在 Pydantic v2 中为 JSON Schema 添加模型级描述
     try:
         model_config = ConfigDict(json_schema_extra={
-            "description": "RustItem：单个 Rust 元素，包含名称与完整源码。"
+            "description": "RustItem：单个 Rust 元素，包含名称、源码与处理说明。"
         })
     except Exception:
         pass
@@ -56,6 +58,7 @@ class BatchState(TypedDict, total=False):
     mapping_c2r: Dict[str, Optional[str]]
     history: List[Dict[str, Any]]
     error: str
+    translated_symbols: List[str]
 
 
 TYPE_MAPPING_CSV = "c_to_rust_type_mapping.csv"
@@ -63,17 +66,45 @@ TYPE_MAPPING_COLLECTION = "c_to_rust_type_mapping"
 TYPE_MAPPING_KEY_FIELDS = ["Type", "C 类型", "C 示例"]
 TYPE_MAPPING_TOP_K = 6
 TYPE_MAPPING_RERANK_TOP_N = 3
-MAX_CHARS_PER_TRANSLATION = 1000
+MAX_CHARS_PER_TRANSLATION = 3000
+COMPILE_MAX_RETRIES = 3
+AUTO_DEPENDENCY_EXPANSION_LIMIT = 64
 
 FUNCTION_SYMBOL_TYPES: Set[str] = {"functions"}
 NON_FUNCTION_SYMBOL_TYPES: Set[str] = {"structs", "typedefs", "macros", "variables", "enums"}
+
+def _symbol_primary_text(symbol: Dict[str, Any]) -> str:
+    return symbol.get("full_declaration", "")
+
+
+def _symbol_unique_key(symbol: Dict[str, Any]) -> Optional[str]:
+    name = symbol.get("name") or symbol.get("symbol") or symbol.get("id")
+    if not name:
+        return None
+
+    sym_type = normalize_symbol_type(symbol.get("type")) or ""
+    file_path = (
+        symbol.get("file_path")
+        or symbol.get("file")
+        or symbol.get("source_file")
+        or symbol.get("path")
+    )
+    file_path_norm = _normalize_c_key(str(file_path)) if file_path else ""
+
+    return "|".join([name, sym_type, file_path_norm])
 
 _ANALYZER: Optional[Analyzer] = None
 _PROJECT_ROOT: Optional[Path] = None
 _RUST_SRC_ROOT: Optional[Path] = None
 _C_TO_RUST_MAP: Optional[Dict[str, Path]] = None
 _DEST_FILE_SYMBOLS: Dict[Path, OrderedDict[str, str]] = {}
+_DEST_EXPECTED_SOURCES: Dict[Path, Set[str]] = {}
+_DEST_COMPLETED_SOURCES: DefaultDict[Path, Set[str]] = defaultdict(set)
+_DEST_FLUSHED_DESTS: Set[Path] = set()
 _SWE_AGENT_INSTANCE: Optional["SWEAgent"] = None
+_RUST_FILE_CACHE: Dict[Path, str] = {}
+
+MAPPING_C2R_FILENAME = "mapping_c2r.json"
 
 
 if TYPE_CHECKING:  # pragma: no cover - 仅用于类型检查
@@ -146,7 +177,7 @@ def _get_swe_agent_instance() -> Optional["SWEAgent"]:
 
     try:
         _SWE_AGENT_INSTANCE = SWEAgent(workspace_root=str(rust_root),logger=True,
-        max_iterations=20,
+        max_iterations=30,
         command_timeout=90,
         memory_strategy={"name": "summary", "token_trigger_max_tokens": 3000},
         )
@@ -246,6 +277,91 @@ def _map_c_path_to_rust_relative(rel_path: Path) -> Optional[Path]:
     return rel_path.with_name(new_name)
 
 
+def _candidate_dest_paths_for_c_file(file_path: str) -> List[Path]:
+    rel_path = _resolve_relative_c_path(file_path)
+    if rel_path is None:
+        return []
+    target_rel = _map_c_path_to_rust_relative(rel_path)
+    if target_rel is None:
+        return []
+    src_root = _get_rust_src_root()
+    if src_root is None:
+        return []
+    return [src_root / target_rel]
+
+
+def _read_rust_file_cached(path: Path) -> Optional[str]:
+    cached = _RUST_FILE_CACHE.get(path)
+    if cached is not None:
+        return cached
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    _RUST_FILE_CACHE[path] = text
+    return text
+
+
+def _extract_rust_item_from_text(rust_name: str, content: str) -> Optional[str]:
+    if not content.strip():
+        return None
+    pattern = re.compile(
+        rf"(?ms)(^pub(?:\([^\n]+\))?(?:\s+\w+)*\s+(?:struct|enum|fn|type|const|static)\s+{re.escape(rust_name)}\b[\s\S]*?)(?=^pub(?:\([^\n]+\))?(?:\s+\w+)*\s+(?:struct|enum|fn|type|const|static)\s+\w|\Z)"
+    )
+    match = pattern.search(content)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: locate first occurrence of the symbol name following a pub item and grab a window of lines.
+    lines = content.splitlines()
+    for idx, line in enumerate(lines):
+        if "pub" in line and rust_name in line:
+            start = max(idx - 2, 0)
+            end = min(idx + 60, len(lines))
+            snippet = "\n".join(lines[start:end]).strip()
+            if snippet:
+                return snippet
+    return None
+
+
+def _load_rust_code_for_dependency(dep, rust_name: str, rust_defs: Dict[str, str]) -> Optional[str]:
+    candidate_paths = _candidate_dest_paths_for_c_file(dep.file_path)
+    for path in candidate_paths:
+        text = _read_rust_file_cached(path)
+        if text is None:
+            continue
+        snippet = _extract_rust_item_from_text(rust_name, text)
+        if snippet:
+            rust_defs[rust_name] = snippet
+            return snippet
+    for path in candidate_paths:
+        text = _read_rust_file_cached(path)
+        if text is None:
+            continue
+        trimmed = text.strip()
+        if trimmed:
+            # limit to avoid oversized context
+            rust_defs[rust_name] = trimmed[:8000]
+            return rust_defs[rust_name]
+    return None
+
+
+def _get_expected_sources_for_dest(dest_path: Path, target_rel: Path) -> Set[str]:
+    expected = _DEST_EXPECTED_SOURCES.get(dest_path)
+    if expected is not None:
+        return expected
+
+    mapping = _load_c_to_rust_map()
+    expected = {
+        c_norm for c_norm, rust_rel in mapping.items()
+        if rust_rel == target_rel
+    }
+    _DEST_EXPECTED_SOURCES[dest_path] = expected
+    return expected
+
+
 def _format_relative_paths(paths: Set[Path]) -> List[str]:
     project_root = _get_project_root_cached()
     formatted: List[str] = []
@@ -260,24 +376,35 @@ def _format_relative_paths(paths: Set[Path]) -> List[str]:
     return formatted
 
 
+def _verify_compile_success(context, agent: "SWEAgent", compile_cmd: str, dest_paths: Set[Path]) -> Tuple[bool, Optional[str]]:
+    try:
+        rerun = agent.toolset.run_command(compile_cmd)
+    except Exception as exc:
+        return False, f"复验命令异常: {exc}"
+
+    if (rerun or {}).get("returncode", 0) == 0:
+        rel_list = _format_relative_paths(dest_paths)
+        return True, "编译通过"
+    return False, "复验失败，错误信息：" + (rerun.get("stderr", "").strip() or rerun.get("stdout", "").strip() or "无错误输出")
+
 def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
     if not dest_paths:
-        return
+        return True
 
     agent = _get_swe_agent_instance()
     if agent is None:
-        return
+        return False
 
     try:
         rust_output_dir = load_rust_output_dir()
     except Exception as exc:
         print(f"无法定位 Rust 输出目录，跳过编译：{exc}")
-        return
+        return False
 
     cargo_toml = rust_output_dir / "Cargo.toml"
     if not cargo_toml.exists():
         print(f"未找到 Cargo.toml: {cargo_toml}")
-        return
+        return False
 
     compile_cmd_parts = ["RUSTFLAGS=-Awarnings", "cargo", "check", "--manifest-path", str(cargo_toml)]
     compile_cmd = " ".join(shlex.quote(part) for part in compile_cmd_parts)
@@ -286,12 +413,12 @@ def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
         result = agent.toolset.run_command(compile_cmd)
     except Exception as exc:
         print(f"SWE Agent 执行编译命令失败: {exc}")
-        return
+        return False
 
     if (result or {}).get("returncode", 0) == 0:
         rel_list = _format_relative_paths(dest_paths)
         print(f"SWE Agent 编译通过: {compile_cmd} -> {', '.join(rel_list)}")
-        return
+        return True
 
     error_output = f"{result.get('stderr', '').strip()}\n{result.get('stdout', '').strip()}".strip()
     if not error_output:
@@ -301,40 +428,54 @@ def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
     truncated_error = "\n".join(error_lines[:200])
 
     rel_paths = _format_relative_paths(dest_paths)
+    cargo_toml_display = _format_relative_paths({cargo_toml})[0] if cargo_toml else str(cargo_toml)
+
     task_description = (
-        "自动转译后的 Rust 文件编译失败，请修复所有编译错误并确保 cargo check 通过。\n"
+        "自动转译后的 Rust 文件编译失败，请修复所有编译错误并确保 cargo check 通过。仅修改必要文件，保留原有功能\n"
         f"涉及文件：{', '.join(rel_paths)}\n"
         f"编译命令使用run_command工具：{compile_cmd}\n"
-        "错误输出：\n"
-        f"{truncated_error}"
+        f"Cargo.toml 位置：{cargo_toml_display}\n"
+        "模块导入提示：库入口文件位于 src/lib.rs，可查看其中的模块声明来确定需要 use 或 pub use 的模块路径，use语句放到文件的开头；但是不要修改src/lib.rs文件\n"
+        "若需查找现有符号或实现，可使用 LSP 搜索工具（如提供的 symbol_definitions/symbol_usage 能力）来定位定义与引用；\n"
+        "如需新增第三方依赖，可调用 run_command 执行 cargo add 或其他下载命令。"
     )
+
+    review_cb = partial(_verify_compile_success, agent=agent, compile_cmd=compile_cmd, dest_paths=dest_paths)
 
     try:
         agent.run_task(
             task_description,
             acceptance_criteria=[
-                "cargo check 成功", "保留已有功能", "仅修改必要文件"
-            ]
+                f"最后一次调用一定是：检查编译错误使用run_command工具：{compile_cmd}cargo check 成功"
+            ],
+            review_condition=review_cb,
         )
     except Exception as exc:
         print(f"SWE Agent 尝试修复编译错误失败: {exc}")
-        return
+        return False
 
     try:
         rerun = agent.toolset.run_command(compile_cmd)
     except Exception as exc:
         print(f"SWE Agent 复验编译命令失败: {exc}")
-        return
+        return False
 
     if (rerun or {}).get("returncode", 0) == 0:
         rel_list = _format_relative_paths(dest_paths)
         print(f"SWE Agent 修复后编译通过: {', '.join(rel_list)}")
+        return True
     else:
         print("SWE Agent 修复后仍未通过编译，请手动检查。")
-        raise RuntimeError("SWE Agent 修复后仍未通过编译，请手动检查。")
+        return False
+        # raise RuntimeError("SWE Agent 修复后仍未通过编译，请手动检查。")
 
 
-def _persist_batch_to_rust(batch: Dict[str, Any], items: List[Dict[str, Any]], mapping_c2r: Dict[str, Optional[str]]) -> Set[Path]:
+def _persist_batch_to_rust(
+    batch: Dict[str, Any],
+    items: List[Dict[str, Any]],
+    mapping_c2r: Dict[str, Optional[str]],
+    full_mapping: Dict[str, Optional[str]],
+) -> Set[Path]:
     src_root = _get_rust_src_root()
     if src_root is None:
         return set()
@@ -367,20 +508,25 @@ def _persist_batch_to_rust(batch: Dict[str, Any], items: List[Dict[str, Any]], m
             continue
         rust_to_destinations.setdefault(rust_name, set()).update(dests)
 
+    fallback_files: Set[Path] = set()
     batch_files_raw = batch.get("files", [])
-    fallback_files: List[Path] = []
     if isinstance(batch_files_raw, list):
         for file_entry in batch_files_raw:
             rel = _resolve_relative_c_path(str(file_entry))
             if rel is not None:
-                fallback_files.append(rel)
+                fallback_files.add(rel)
 
-    fallback_destinations: Set[Path] = set()
+    for rel_paths in symbol_files.values():
+        fallback_files.update(rel_paths)
+
+    sources_by_dest_rel: DefaultDict[Path, Set[str]] = defaultdict(set)
     for rel_path in fallback_files:
         target_rel = _map_c_path_to_rust_relative(rel_path)
-        if target_rel is not None:
-            fallback_destinations.add(target_rel)
+        if target_rel is None:
+            continue
+        sources_by_dest_rel[target_rel].add(_normalize_c_key(rel_path.as_posix()))
 
+    fallback_destinations: Set[Path] = set(sources_by_dest_rel.keys())
     if not fallback_destinations and symbol_destinations:
         for dests in symbol_destinations.values():
             fallback_destinations.update(dests)
@@ -397,43 +543,80 @@ def _persist_batch_to_rust(batch: Dict[str, Any], items: List[Dict[str, Any]], m
         if not target_rels:
             continue
         for target_rel in target_rels:
-            dest_path = src_root / target_rel
             cleaned_code = code.strip()
             if not cleaned_code:
                 continue
-            dest_segments.setdefault(dest_path, {})[rust_name] = cleaned_code
+            dest_segments.setdefault(target_rel, {})[rust_name] = cleaned_code
 
-    if not dest_segments:
+    affected_target_rels: Set[Path] = set(dest_segments.keys()) | set(sources_by_dest_rel.keys())
+    if not affected_target_rels:
         return set()
+
+    updated_dest_paths: Set[Path] = set()
+    for target_rel, segments in dest_segments.items():
+        dest_path = src_root / target_rel
+        symbol_map = _DEST_FILE_SYMBOLS.setdefault(dest_path, OrderedDict())
+        updated = False
+        for rust_name, cleaned_code in segments.items():
+            existing_code = symbol_map.get(rust_name)
+            if existing_code == cleaned_code:
+                continue
+            symbol_map[rust_name] = cleaned_code
+            updated = True
+        if updated:
+            updated_dest_paths.add(dest_path)
+
+    for target_rel, source_norms in sources_by_dest_rel.items():
+        dest_path = src_root / target_rel
+        _DEST_COMPLETED_SOURCES[dest_path].update(source_norms)
 
     written_paths: Set[Path] = set()
 
-    for dest_path, segments in dest_segments.items():
+    for target_rel in affected_target_rels:
+        dest_path = src_root / target_rel
+        symbol_map = _DEST_FILE_SYMBOLS.get(dest_path)
+        if not symbol_map:
+            continue
+        expected_sources = _get_expected_sources_for_dest(dest_path, target_rel)
+        completed_sources = _DEST_COMPLETED_SOURCES.get(dest_path, set())
+        ready = not expected_sources or expected_sources.issubset(completed_sources)
+        if not ready:
+            continue
+        should_flush = dest_path in updated_dest_paths or dest_path not in _DEST_FLUSHED_DESTS
+        if not should_flush:
+            continue
+        content_pieces = [segment.rstrip() for segment in symbol_map.values() if segment.strip()]
+        if not content_pieces:
+            continue
         try:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-            symbol_map = _DEST_FILE_SYMBOLS.setdefault(dest_path, OrderedDict())
-
-            updated = False
-            for rust_name, cleaned_code in segments.items():
-                existing_code = symbol_map.get(rust_name)
-                if existing_code == cleaned_code:
-                    continue
-                symbol_map[rust_name] = cleaned_code
-                updated = True
-
-            if not symbol_map or not updated:
-                continue
-
-            content_pieces = [segment.rstrip() for segment in symbol_map.values() if segment.strip()]
-            if not content_pieces:
-                continue
-
-            final_text = "\n\n".join(content_pieces).rstrip() + "\n"
+            body_text = "\n\n".join(content_pieces).rstrip()
+            final_text = body_text + "\n"
             dest_path.write_text(final_text, encoding="utf-8")
             written_paths.add(dest_path)
+            _DEST_FLUSHED_DESTS.add(dest_path)
         except Exception as exc:
             print(f"写入 Rust 文件失败: {dest_path}: {exc}")
     return written_paths
+
+
+def _persist_mapping_c2r(mapping: Dict[str, Optional[str]]) -> None:
+    try:
+        rust_output_dir = load_rust_output_dir()
+    except Exception as exc:
+        print(f"无法定位 Rust 输出目录，跳过映射保存：{exc}")
+        return
+
+    if rust_output_dir is None:
+        return
+
+    target_path = rust_output_dir / MAPPING_C2R_FILENAME
+
+    try:
+        payload = {"mapping_c2r": mapping}
+        target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"写入 mapping_c2r 失败: {exc}")
 
 
 def _parse_mapping_doc(doc: str) -> Optional[Tuple[Dict[str, str], Dict[str, str]]]:
@@ -461,8 +644,8 @@ def retrieve_type_mapping_context(batch) -> List[str]:
     seen_keys: set[Tuple[Tuple[str, str], ...]] = set()
 
     for symbol in batch.get("symbols", []):
-        content = symbol.get("content", "")
-        if not isinstance(content, str) or not content.strip():
+        content = _symbol_primary_text(symbol)
+        if not content.strip():
             continue
 
         docs = search_knowledge_base(
@@ -500,19 +683,168 @@ def get_analyzer() -> Analyzer:
     return _ANALYZER
 
 
+def _mapping_has_resolved_target(mapping: Dict[str, Optional[str]], name: Optional[str]) -> bool:
+    if not name:
+        return False
+    direct = mapping.get(name)
+    if isinstance(direct, str) and direct.strip():
+        return True
+    normalized = _normalize_c_key(name)
+    resolved = mapping.get(normalized)
+    return isinstance(resolved, str) and resolved.strip()
+
+
+def _get_symbol_ref_for_symbol(analyzer: Analyzer, symbol: Dict[str, Any]):
+    name = symbol.get("name") or symbol.get("symbol") or symbol.get("id")
+    sym_type = normalize_symbol_type(symbol.get("type"))
+    file_path = symbol.get("file_path")
+    if not (name and sym_type and file_path):
+        return None
+    try:
+        refs = analyzer.find_symbols_by_name(name, symbol_type=sym_type, file_path=file_path)
+    except Exception:
+        return None
+    return refs[0] if refs else None
+
+
+def _materialize_symbol_from_ref(analyzer: Analyzer, sym_ref) -> Optional[Dict[str, Any]]:
+    file_data = analyzer.analysis_data.get(sym_ref.file_path) if hasattr(analyzer, "analysis_data") else None
+    candidate: Optional[Dict[str, Any]] = None
+    entries = []
+    if isinstance(file_data, dict):
+        entries = file_data.get(sym_ref.type, []) or []
+        for entry in entries:
+            entry_name = entry.get("name") or entry.get("text")
+            if entry_name != sym_ref.name:
+                continue
+            entry_start = entry.get("start_line")
+            if entry_start and sym_ref.start_line and entry_start != sym_ref.start_line:
+                continue
+            candidate = entry
+            break
+        if candidate is None:
+            for entry in entries:
+                entry_name = entry.get("name") or entry.get("text")
+                if entry_name == sym_ref.name:
+                    candidate = entry
+                    break
+
+    if candidate is None:
+        definition = analyzer.extract_definition_text(sym_ref)
+        if not definition.strip():
+            return None
+        return {
+            "name": sym_ref.name,
+            "type": sym_ref.type,
+            "file_path": sym_ref.file_path,
+            "full_definition": definition,
+            "full_declaration": "",
+        }
+
+    symbol_data = dict(candidate)
+    symbol_data["name"] = sym_ref.name
+    symbol_data["type"] = sym_ref.type
+    symbol_data["file_path"] = sym_ref.file_path
+
+    if not symbol_data.get("full_definition"):
+        definition = analyzer.extract_definition_text(sym_ref)
+        if definition.strip():
+            symbol_data["full_definition"] = definition
+
+    if not symbol_data.get("full_declaration"):
+        placeholder_decl = symbol_data.get("declaration") or symbol_data.get("text") or ""
+        symbol_data["full_declaration"] = placeholder_decl
+
+    return symbol_data
+
+
+def _expand_symbols_with_missing_dependencies(
+    symbols: List[Dict[str, Any]],
+    current_mapping: Dict[str, Optional[str]],
+) -> Tuple[List[Dict[str, Any]], int]:
+    if not symbols:
+        return symbols, 0
+
+    try:
+        analyzer = get_analyzer()
+    except Exception:
+        return symbols, 0
+
+    expanded: List[Dict[str, Any]] = list(symbols)
+    added = 0
+    visited_keys: Set[str] = set()
+    pending_refs: List = []
+
+    for symbol in expanded:
+        sym_ref = _get_symbol_ref_for_symbol(analyzer, symbol)
+        if sym_ref is None:
+            continue
+        key = sym_ref.key()
+        if key in visited_keys:
+            continue
+        visited_keys.add(key)
+        pending_refs.append(sym_ref)
+
+    while pending_refs:
+        current_ref = pending_refs.pop(0)
+
+        try:
+            func_nodes, _ = analyzer.get_dependencies(
+                current_ref,
+                depth=1,
+                direction="out",
+                symbol_types=FUNCTION_SYMBOL_TYPES,
+            )
+        except Exception:
+            func_nodes = []
+
+        try:
+            non_func_nodes, _ = analyzer.get_dependencies(
+                current_ref,
+                depth=None,
+                direction="out",
+                symbol_types=NON_FUNCTION_SYMBOL_TYPES,
+            )
+        except Exception:
+            non_func_nodes = []
+
+        for dep in func_nodes + non_func_nodes:
+            dep_key = dep.key()
+            if dep_key in visited_keys:
+                continue
+            visited_keys.add(dep_key)
+
+            if _mapping_has_resolved_target(current_mapping, dep.name):
+                continue
+
+            dep_symbol = _materialize_symbol_from_ref(analyzer, dep)
+            if dep_symbol is None:
+                continue
+
+            expanded.append(dep_symbol)
+            pending_refs.append(dep)
+            added += 1
+
+            if added >= AUTO_DEPENDENCY_EXPANSION_LIMIT:
+                return expanded, added
+
+    return expanded, added
+
+
 def gather_dependency_context(
     symbols: List[Dict[str, Any]],
     current_mapping: Dict[str, Optional[str]],
     rust_defs: Dict[str, str],
     depth: int = 1,
-) -> List[str]:
-    if not symbols or not current_mapping or not rust_defs:
-        return []
+
+) -> Tuple[List[str], str]:
+    if not symbols:
+        return [], ""
 
     try:
         analyzer = get_analyzer()
     except Exception:
-        return []
+        return [], ""
 
     context_blocks: List[str] = []
     seen_pairs: set[Tuple[str, str]] = set()
@@ -520,7 +852,7 @@ def gather_dependency_context(
 
     for symbol in symbols:
         name = symbol.get("name") or symbol.get("symbol") or symbol.get("id")
-        sym_type = symbol.get("type")
+        sym_type = normalize_symbol_type(symbol.get("type"))
         file_path = symbol.get("file_path")
         if not (name and sym_type and file_path):
             continue
@@ -574,13 +906,27 @@ def gather_dependency_context(
             seen_pairs.add(pair)
             context_blocks.append(f"// {c_name} -> {rust_name}\n{rust_code}\n")
 
-    return context_blocks
+    summary_text = ""
+    try:
+        summary_result = analyzer.get_batch_dependency_contexts(
+            symbols,
+            depth=depth,
+            summary=True,
+            max_size=10000,
+        )
+        if isinstance(summary_result, str):
+            summary_text = summary_result
+    except Exception:
+        summary_text = ""
+
+    return context_blocks, summary_text
 
 
 def build_batch_prompt(
     batch,
     mapping_entries: Optional[List[str]] = None,
     dependency_entries: Optional[List[str]] = None,
+    dependency_summary: Optional[str] = None,
 ):
     """构造单次调用包含整个 batch 的提示词。"""
     items = []
@@ -591,34 +937,40 @@ def build_batch_prompt(
             or s.get("id")
             or f"item_{i}"
         )
+        content = _symbol_primary_text(s)
         items.append({
             "idx": i,
             "c_name": c_name,
-            "content": s["content"],
+            "content": content,
         })
     c_inputs = json.dumps(items, ensure_ascii=False, indent=2)
     instr = (
         "你是一名资深的 C -> Rust 转译器。请将下面列表中的每个 C 符号独立、安全地转为 Rust。\n"
         "要求：\n"
-        "- 使用纯 Rust 特性，不使用 unsafe 代码；\n"
+        "- 使用纯 Rust 安全惯用特性，不使用 unsafe 代码；\n"
         "- 用 mut 关键字声明可变变量；\n"
-        "- 不使用任何 `c_void`、`*mut`、`*const` 指针，任何类似CString这种ffi操作的类型；\n"
-        "- 返回最优结果，不做解释；\n"
-        "- 避免使用 Box<dyn Any>；\n"
-        "- 如为宏/常量，优先转为 const/静态或等价的安全形式；\n"
+        "- 避免使用任何 `c_void`、`*mut`、`*const` 、`Box<dyn Any>`指针，任何ffi操作的类型；泛型用途的万能指针或结构体内部万能指针变量使用Rust的泛型<T>，智能指针，泛型结构体替代，确保内存安全和所有权管理\n"
+        "- 评估并改进数据结构及所有权/借用模型；避免不必要的 clone/Box，可引入 Rc/RefCell/Weak(弱引用防止循环引用，管理父子关系) 等模式；\n"
         "- 如为类型/结构体/函数签名，给出 idiomatic 的 Rust 定义（尽量使用所有权/借用）；\n"
-        "- 如果类型为函数声明，给出完整函数签名，包括参数和返回值类型；函数主体使用 unimplemented!() 占位；\n"
+        "- 结构体所有成员使用pub关键字，所有函数，结构体，枚举，全局变量，全局类型定义声明成pub，允许外部访问，生成的所有的rust函数定义前面加pub关键字, 不要出现非pub的函数定义\n"
+        "- 所有定义前加 pub；不得出现 impl/trait/class 等封装\n"
+        "- 如果类型为函数声明，给出完整函数签名，包括参数和返回值类型；函数主体必须使用 unimplemented!() 占位；比如：pub fn foo() -> i32 {\n    unimplemented!()\n"
         "- 仅输出我指定的 JSON 结果，不要多余说明；\n"
         "- 不要使用任何面向对象的特性；如果 C 语言是全局函数，转换成的 Rust 也保持全局函数，不要使用 impl 封装；\n"
         "- 类型转换建议，请严格按照以下要求执行，以避免类型不匹配：\n"
         "  - int, char, unsigned int, unsigned char, float, double, enum, bool 等基本类型转换为 i32, i8, u32, u8, f32, f64、对应枚举或 bool；\n"
-        "  - char* 字符串或 void* 字符串类型转换为 Rust 的 String；\n"
+        "  - 对于 void * 等万能指针如果作为泛型用途，则使用泛型 T类型替代。\n"
+        "  - C语言字符串或类型转换为 Rust 的 String；\n"
         "  - 一维动态数组优先转换为 Rust的切片操作；\n"
-        "  - 忽略任何typedef 或者没有定义的结构体，将其转换为空\n"
-        "输出对象必须包含键：items, mapping_c2r。\n"
-        "- items: [{name, code}]\n"
+        "  - 不要用带有生命周期参数的泛型类型；\n"
+        "  - 匿名结构体/联合体，转换为具名结构体/联合体；\n"
+        "- 如果 C 宏可以直接使用标准库中的既有宏或函数，请优先复用（例如 assert 对应 Rust 的 assert! 宏）；\n"
+    "输出对象必须包含键：items, mapping_c2r。\n"
+    "- items: [{name, code, note}]\n"
         "- mapping_c2r: {c_name: rust_name | null}\n"
-        "规则：安全 Rust；不要多余说明；items.name 必须与 mapping_c2r 的值一致；"
+    "允许的处理方式仅限 translate(生成新Rust实现)、map(复用已有实现，映射到已经转换完成的Rust符号) 与 delete(删除无意义符号，映射为null表示删除)。\n"
+    "note 字段为字符串，简单明确指明上述哪一种处理并给出原因，无额外说明可留空；\n"
+    "规则：安全 Rust；不要多余说明；items.name 必须与 mapping_c2r 的值一致；"
         f"输入 items（idx/c_name/content）：\n{c_inputs}"
     )
 
@@ -637,19 +989,26 @@ def build_batch_prompt(
             f"{dependency_text}"
         )
 
+    if dependency_summary:
+        instr += (
+            "\n\n【依赖上下文摘要】\n"
+            f"{dependency_summary}"
+        )
+
     return instr
 
 
 def _translate_symbols(
     chunk_batch: Dict[str, Any],
     dependency_entries: Optional[List[str]] = None,
+    dependency_summary: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Optional[str]]]:
     """调用 LLM 转译一个子批次的符号集合。"""
     llm = LLM(logger=True)
     parser = TemplateParser("{batch:json:RustBatch}", model_map={"RustBatch": RustBatch})
     # mapping_entries = retrieve_type_mapping_context(chunk_batch)
     mapping_entries: Optional[List[str]] = None
-    prompt = build_batch_prompt(chunk_batch, mapping_entries, dependency_entries)
+    prompt = build_batch_prompt(chunk_batch, mapping_entries, dependency_entries, dependency_summary)
     result = llm.call(prompt, parser=parser, max_retry=5)
     if not isinstance(result, dict) or not result.get("success"):
         raise RuntimeError(f"LLM 解析失败: {result}")
@@ -682,9 +1041,7 @@ def _chunk_symbols_by_chars(symbols: List[Dict[str, Any]], max_chars: int) -> Li
     current_chars = 0
 
     for symbol in symbols:
-        content = symbol.get("content", "")
-        if not isinstance(content, str):
-            content = str(content)
+        content = _symbol_primary_text(symbol)
         symbol_chars = len(content)
 
         if current_chunk and current_chars + symbol_chars > max_chars:
@@ -719,10 +1076,47 @@ def translate_batch(
     base_mapping = dict(known_mapping or {})
     base_rust_defs = dict(known_rust_defs or {})
 
-    chunks = _chunk_symbols_by_chars(symbols, MAX_CHARS_PER_TRANSLATION)
+    # 过滤
+    pending_symbols: List[Dict[str, Any]] = []
+    skipped = 0
+    for symbol in symbols:
+        c_name = (
+            symbol.get("name")
+            or symbol.get("symbol")
+            or symbol.get("id")
+        )
+        if symbol.get("type") == "functions" and symbol.get("full_definition") == "":
+            skipped += 1
+            continue
+        pending_symbols.append(symbol)
+
+    if not pending_symbols:
+        if skipped:
+            print(f"[translate_batch] skipped {skipped} symbols already mapped; nothing to do.")
+        return [], {}
+
+    if skipped:
+        print(f"[translate_batch] skipped {skipped} symbols already present in mapping.")
+
+    pending_symbols, auto_added = _expand_symbols_with_missing_dependencies(pending_symbols, base_mapping)
+    if auto_added:
+        print(f"[translate_batch] automatically appended {auto_added} dependency symbol(s) to current batch.")
+    batch["symbols"] = pending_symbols
+
+    # pending_symbols = symbols
+    pending_symbols_names = [
+        s.get("name") or s.get("symbol") or s.get("id") or f"item_{i}"
+        for i, s in enumerate(pending_symbols)
+    ]
+
+    print(f"-------------- [translate_batch] translating symbols {pending_symbols_names}...")
+
+    chunks = _chunk_symbols_by_chars(pending_symbols, MAX_CHARS_PER_TRANSLATION)
     if len(chunks) <= 1:
-        dependency_entries = gather_dependency_context(symbols, base_mapping, base_rust_defs)
-        items, mapping_c2r = _translate_symbols(batch, dependency_entries)
+        sub_batch = dict(batch)
+        sub_batch["symbols"] = pending_symbols
+        dependency_entries, dependency_summary = gather_dependency_context(pending_symbols, base_mapping, base_rust_defs)
+        items, mapping_c2r = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
         _log_chunk_output(batch, 1, items, mapping_c2r)
         return items, mapping_c2r
 
@@ -735,8 +1129,8 @@ def translate_batch(
     for chunk_index, chunk in enumerate(chunks, start=1):
         sub_batch = dict(batch)
         sub_batch["symbols"] = chunk
-        dependency_entries = gather_dependency_context(chunk, current_mapping, current_rust_defs)
-        items, mapping_c2r = _translate_symbols(sub_batch, dependency_entries)
+        dependency_entries, dependency_summary = gather_dependency_context(chunk, current_mapping, current_rust_defs)
+        items, mapping_c2r = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
         _log_chunk_output(batch, chunk_index, items, mapping_c2r)
         aggregated_items.extend(items)
         aggregated_mapping.update(mapping_c2r)
@@ -761,6 +1155,37 @@ def _translation_node(state: BatchState) -> BatchState:
     batch = remaining[0]
     rest = remaining[1:]
     try:
+        translated_symbols = set(state.get("translated_symbols", []))
+
+        original_symbols = list(batch.get("symbols", []))
+        filtered_symbols: List[Dict[str, Any]] = []
+        for symbol in original_symbols:
+            key = _symbol_unique_key(symbol)
+            if key and key in translated_symbols:
+                continue
+            filtered_symbols.append(symbol)
+
+        if not filtered_symbols:
+            history = list(state.get("history", []))
+            history.append(
+                {
+                    "batch_id": batch.get("batch_id"),
+                    "items": [],
+                    "mapping_c2r": {},
+                    "note": "skipped (all symbols already translated)",
+                }
+            )
+            return {
+                "remaining_batches": rest,
+                "items": list(state.get("items", [])),
+                "mapping_c2r": dict(state.get("mapping_c2r", {})),
+                "history": history,
+                "translated_symbols": sorted(translated_symbols),
+            }
+
+        working_batch = dict(batch)
+        working_batch["symbols"] = filtered_symbols
+
         existing_mapping = dict(state.get("mapping_c2r", {}))
         existing_items = state.get("items", []) or []
         rust_defs = {
@@ -769,15 +1194,22 @@ def _translation_node(state: BatchState) -> BatchState:
             if isinstance(item, dict) and isinstance(item.get("name"), str) and isinstance(item.get("code"), str)
         }
 
-        items, mapping_c2r = translate_batch(batch, existing_mapping, rust_defs)
-        written_paths = _persist_batch_to_rust(batch, items, mapping_c2r)
-        _run_swe_agent_compile(written_paths)
-
-        aggregated_items = list(state.get("items", []))
-        aggregated_items.extend(items)
+        items, mapping_c2r = translate_batch(working_batch, existing_mapping, rust_defs)
 
         aggregated_mapping = dict(state.get("mapping_c2r", {}))
         aggregated_mapping.update(mapping_c2r)
+
+        compile_success = False
+        for _ in range(COMPILE_MAX_RETRIES):
+            written_paths = _persist_batch_to_rust(working_batch, items, mapping_c2r, aggregated_mapping)
+            compile_success = _run_swe_agent_compile(written_paths)
+            if compile_success:
+                break
+            else:
+                print("------------------编译未通过，重试中...")
+
+        aggregated_items = list(state.get("items", []))
+        aggregated_items.extend(items)
 
         history = list(state.get("history", []))
 
@@ -789,11 +1221,24 @@ def _translation_node(state: BatchState) -> BatchState:
             }
         )
 
+        processed_keys = {
+            key
+            for key in (
+                _symbol_unique_key(symbol)
+                for symbol in working_batch.get("symbols", [])
+            )
+            if key
+        }
+        translated_symbols.update(processed_keys)
+
+        _persist_mapping_c2r(aggregated_mapping)
+
         return {
             "remaining_batches": rest,
             "items": aggregated_items,
             "mapping_c2r": aggregated_mapping,
             "history": history,
+            "translated_symbols": sorted(translated_symbols),
         }
     except Exception as exc:  # pragma: no cover - 透传异常给上层处理
         return {"error": str(exc)}
@@ -825,7 +1270,12 @@ def _build_translation_app() -> StateGraph:
 TRANSLATION_APP = _build_translation_app()
 
 
+
 def main():
+    
+    cmd = ["python", "clear_rs.py"]
+    subprocess.run(cmd, check=True)
+
     global _C_TO_RUST_MAP, _DEST_FILE_SYMBOLS
     _C_TO_RUST_MAP = None
     _DEST_FILE_SYMBOLS = {}
@@ -846,6 +1296,7 @@ def main():
         "items": [],
         "mapping_c2r": {},
         "history": [],
+        "translated_symbols": [],
     }
 
     result_state = TRANSLATION_APP.invoke(initial_state, config={"recursion_limit": 100})
@@ -872,6 +1323,8 @@ def main():
     print("// 汇总映射表：C -> Rust")
     for c_name, rust_name in mapping_c2r.items():
         print(f"// {c_name} -> {rust_name}")
+
+    _persist_mapping_c2r(mapping_c2r)
 
 
 if __name__ == "__main__":

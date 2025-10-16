@@ -21,8 +21,6 @@ add_library(adt STATIC
   src/slist.c
   src/sortedarray.c
   src/trie.c
-  src/tinyexpr.c
-   src/utf8-decoder.c
 )
 target_include_directories(adt PRIVATE src test)
 add_compile_definitions(ALLOC_TESTING)
@@ -38,7 +36,6 @@ function(add_adt_test suffix)
 endfunction()
 
 enable_testing()
-add_adt_test(utf8-decoder)
 add_adt_test(alloc-testing)
 add_adt_test(arraylist)
 add_adt_test(avl-tree)
@@ -55,11 +52,9 @@ add_adt_test(set)
 add_adt_test(slist)
 add_adt_test(sortedarray)
 add_adt_test(trie)
-add_adt_test(tinyexpr)
 add_executable(test-cpp test/test-cpp.cpp test/framework.c test/alloc-testing.c)
 target_include_directories(test-cpp PRIVATE src test)
 target_link_libraries(test-cpp adt)
-target_link_libraries(test-tinyexpr m)
 add_test(
   NAME test-cpp
   COMMAND test-cpp
