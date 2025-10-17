@@ -1,3 +1,4 @@
+import difflib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ except ImportError:  # Pydantic v1 fallback
 from analyzer.symbol_model import normalize_symbol_type
 from llm.llm import LLM
 from llm.template_parser.template_parser import TemplateParser
+from collections import deque
 
 from analyzer.config import load_rust_output_dir
 
@@ -93,6 +95,28 @@ class CandidateEvaluationModel(BaseModel):
     score: float = 0.0
     reason: str = ""
 
+
+class Memory:
+    def __init__(self, max_size=3, memory_type="Reflection"):
+        self.mem = deque(maxlen=max_size)  # 限制记忆长度
+        self.memory_type = memory_type
+    
+    def add(self, item):
+        self.mem.append(item)
+    
+    def get_context(self):
+        return "\n".join([f"# {self.memory_type} {i+1}: {r}" for i, r in enumerate(self.mem)])
+    
+    def clear(self):
+        self.mem.clear()
+
+    def get_latest(self, n=1):
+        latest_items = list(self.mem)[-n:] if self.mem else []
+        return "\n".join([f"# {self.memory_type} {len(self.mem) - len(latest_items) + i + 1}: {r}" for i, r in enumerate(latest_items)])
+
+
+
+TRAJECTORY_MEMORY = Memory(max_size=5, memory_type="历史改错")
 
 
 def gather_dependency_context_from_project(
@@ -431,11 +455,232 @@ def _summarize_candidate_changes(candidate: Dict[str, Dict[str, Any]]) -> str:
     return "; ".join(entries) if entries else "无显著变更"
 
 
+def _generate_candidate_diff_summary(
+    original_payload: Dict[str, Dict[str, Any]],
+    candidate_payload: Dict[str, Dict[str, Any]],
+    metadata: Dict[str, Dict[str, Any]],
+    max_chars: int = 1800,
+) -> str:
+    diff_sections: List[str] = []
+    for file_rel, file_changes in candidate_payload.items():
+        if not isinstance(file_rel, str) or not isinstance(file_changes, dict):
+            continue
+
+        orig_entries = original_payload.get(file_rel, {})
+        if not isinstance(orig_entries, dict):
+            orig_entries = {}
+
+        meta_entry = metadata.get(file_rel, {})
+        symbol_snippets = {}
+        if isinstance(meta_entry, dict):
+            symbol_snippets = meta_entry.get("symbol_snippets", {}) or {}
+            if not isinstance(symbol_snippets, dict):
+                symbol_snippets = {}
+
+        for symbol, new_code in file_changes.items():
+            if symbol == "extra":
+                continue
+            if not isinstance(symbol, str) or not isinstance(new_code, str):
+                continue
+
+            old_code = ""
+            old_value = orig_entries.get(symbol)
+            if isinstance(old_value, str):
+                old_code = old_value
+            elif isinstance(symbol_snippets, dict):
+                fallback = symbol_snippets.get(symbol)
+                if isinstance(fallback, str):
+                    old_code = fallback
+
+            if old_code == new_code:
+                continue
+
+            diff_iter = difflib.unified_diff(
+                old_code.splitlines(),
+                new_code.splitlines(),
+                fromfile=f"{file_rel}:{symbol}:before",
+                tofile=f"{file_rel}:{symbol}:after",
+                lineterm="",
+            )
+            diff_text = "\n".join(diff_iter).strip()
+            if diff_text:
+                diff_sections.append(diff_text)
+
+        extra_value = file_changes.get("extra")
+        if isinstance(extra_value, list):
+            orig_extra_raw = orig_entries.get("extra") if isinstance(orig_entries, dict) else None
+            orig_extra_list = [item for item in orig_extra_raw if isinstance(item, str)] if isinstance(orig_extra_raw, list) else []
+            new_extra_text = "\n".join(item for item in extra_value if isinstance(item, str))
+            orig_extra_text = "\n".join(orig_extra_list)
+            if new_extra_text != orig_extra_text:
+                diff_iter = difflib.unified_diff(
+                    orig_extra_text.splitlines(),
+                    new_extra_text.splitlines(),
+                    fromfile=f"{file_rel}:extra:before",
+                    tofile=f"{file_rel}:extra:after",
+                    lineterm="",
+                )
+                diff_text = "\n".join(diff_iter).strip()
+                if diff_text:
+                    diff_sections.append(diff_text)
+
+    if not diff_sections:
+        return ""
+
+    combined = "\n\n".join(diff_sections)
+    return _truncate_text(combined, max_chars)
+
+
+def _format_symbol_diff_for_history(
+    file_rel: str,
+    symbol: str,
+    old_code: str,
+    new_code: str,
+    max_lines: int = 40,
+) -> Optional[str]:
+    if old_code == new_code:
+        return None
+
+    diff_lines: List[str] = []
+    for line in difflib.ndiff(old_code.splitlines(), new_code.splitlines()):
+        if not line:
+            continue
+        if line[0] in {"+", "-"}:
+            diff_lines.append(line[:1] + " " + line[2:])
+        elif line.startswith("? "):
+            continue
+    if not diff_lines:
+        return None
+
+    if len(diff_lines) > max_lines:
+        truncated = diff_lines[:max_lines]
+        truncated.append("... (diff truncated)")
+        diff_lines = truncated
+
+    header = f"{file_rel}::{symbol}"
+    body = "\n".join(diff_lines)
+    return f"{header}\n{body}"
+
+
+def _build_history_entry(
+    attempt_no: int,
+    original_payload: Dict[str, Dict[str, Any]],
+    candidate_payload: Dict[str, Dict[str, Any]],
+    metadata: Dict[str, Dict[str, Any]],
+    compile_output: str,
+    success: bool,
+    baseline_compile_output: Optional[str] = None,
+) -> str:
+    change_summary = _summarize_candidate_changes(candidate_payload)
+    diff_summary = _generate_candidate_diff_summary(original_payload, candidate_payload, metadata)
+    status_text = "成功" if success else "失败"
+
+    symbol_summaries: List[str] = []
+
+    for file_rel, file_changes in candidate_payload.items():
+        if not isinstance(file_rel, str) or not isinstance(file_changes, dict):
+            continue
+
+        orig_entries = original_payload.get(file_rel, {}) if isinstance(original_payload, dict) else {}
+        if not isinstance(orig_entries, dict):
+            orig_entries = {}
+
+        meta_entry = metadata.get(file_rel, {}) if isinstance(metadata, dict) else {}
+        symbol_snippets = meta_entry.get("symbol_snippets", {}) if isinstance(meta_entry, dict) else {}
+        if not isinstance(symbol_snippets, dict):
+            symbol_snippets = {}
+
+        for symbol, new_code in file_changes.items():
+            if symbol == "extra" or not isinstance(symbol, str) or not isinstance(new_code, str):
+                continue
+            old_code = ""
+            old_value = orig_entries.get(symbol)
+            if isinstance(old_value, str):
+                old_code = old_value
+            else:
+                fallback = symbol_snippets.get(symbol)
+                if isinstance(fallback, str):
+                    old_code = fallback
+
+            formatted = _format_symbol_diff_for_history(file_rel, symbol, old_code, new_code)
+            if formatted:
+                symbol_summaries.append(formatted)
+
+        extra_value = file_changes.get("extra")
+        if isinstance(extra_value, list):
+            orig_extra_raw = orig_entries.get("extra") if isinstance(orig_entries, dict) else None
+            orig_extra_list = [item for item in orig_extra_raw if isinstance(item, str)] if isinstance(orig_extra_raw, list) else []
+            new_extra_text = "\n".join(item for item in extra_value if isinstance(item, str))
+            orig_extra_text = "\n".join(orig_extra_list)
+            formatted = _format_symbol_diff_for_history(file_rel, "导入语句", orig_extra_text, new_extra_text)
+            if formatted:
+                symbol_summaries.append(formatted)
+
+    raw_history_context = None
+    if symbol_summaries or diff_summary:
+        diff_block = diff_summary or "\n\n".join(symbol_summaries)
+        baseline_excerpt = _truncate_text((baseline_compile_output or "").strip(), 1000)
+        current_excerpt = _truncate_text((compile_output or "").strip(), 1200)
+        history_summary_prompt = textwrap.dedent(
+            f"""
+            你是一个代码诊断专家。请阅读改前编译报错、代码改动以及改后编译结果，生成两段简洁的总结：
+            1. 修改摘要：说明针对哪些报错（引用改前日志关键信息）做了哪些代码改动，涉及的函数/导入及调整方向。
+            2. 结果判读：若仍失败，请分析主要报错并说明与改前报错的差异；若已成功，请确认 cargo check 通过并概述与改前报错相比的改善。
+
+            ### 改前编译错误
+            {baseline_excerpt or '无'}
+
+            ### 代码差异
+            {diff_block}
+
+            ### 改后编译输出
+            {current_excerpt or '无'}
+
+            输出格式示例：
+            "修改摘要: ...\n失败原因: ..." 或 "修改摘要: ...\n结果: cargo check 已通过"。
+            """
+        ).strip()
+        try:
+            llm = LLM(logger=False)
+            raw_history_context = llm.call(history_summary_prompt, parser=None, max_retry=2)
+        except Exception:
+            raw_history_context = None
+
+    lines: List[str] = [
+        f"尝试 {attempt_no}: {status_text}",
+        f"改动摘要: {change_summary or '无'}",
+    ]
+
+    if raw_history_context:
+        lines.append(str(raw_history_context).strip())
+    else:
+        if baseline_compile_output:
+            baseline_trimmed = _truncate_text((baseline_compile_output or "").strip(), 1500)
+            lines.append("改前编译错误摘要:\n" + (baseline_trimmed or "无输出"))
+
+        if symbol_summaries:
+            change_block = "\n\n".join(symbol_summaries)
+            lines.append("本轮改动细节:\n" + _truncate_text(change_block, 1800))
+        elif diff_summary:
+            lines.append("代码差异:\n" + diff_summary)
+
+        if success:
+            lines.append("结果: cargo check 已通过")
+            if compile_output:
+                lines.append("改后编译输出:\n" + _truncate_text((compile_output or "").strip(), 600))
+        else:
+            trimmed_error = _truncate_text((compile_output or "").strip(), 1500)
+            lines.append("改后编译错误摘要:\n" + (trimmed_error or "无输出"))
+
+    return "\n".join(lines).strip()
+
+
 def _evaluate_candidate_progress(
     llm: LLM,
     baseline_output: str,
     candidate_output: str,
     candidate_payload: Dict[str, Dict[str, Any]],
+    history_context: str,
 ) -> Tuple[float, str]:
     if not baseline_output or not candidate_output:
         return 0.0, ""
@@ -456,12 +701,20 @@ def _evaluate_candidate_progress(
 
         候选修复涉及的改动概览：{change_summary}
 
+        - 历史改错记录：
+        {history_context}
+
         请判断候选错误是否相较基准错误更接近于通过编译，输出 JSON：{{"score": 浮点数, "reason": "简述判断依据"}}。
         - `score` 取值范围建议在 [-1, 1]，越大表示越有希望继续沿着此方向迭代。
         - 若难以判断，返回 0。
         - 仅输出 JSON，不要添加额外文本。
 
         - 绝对不允许出现未预期的闭合分隔符，如打破函数的布局的错误，比如 unexpected closing delimiter，这种错误是非常严重的错误，应该给出 -1 的评分。
+                - 请参考以下评分细则：
+                    * 核心报错数量显著减少，或错误仅剩告警/轻微问题：score 介于 0.5 至 1 之间；若几乎能通过编译，趋近 1。
+                    * 报错类型有所改善（如从 borrow 错误降级为简单类型不匹配），记 0 至 0.5；如果只是局部优化或信息不足，可给接近 0 的分数。
+                    * 与基准持平（错误完全一致或仅日志顺序不同），记 0并说明原因。
+                    * 新增严重错误或原有错误加重，记负分；出现语法破坏、未预期的闭合分隔符等高危问题，分值应低于 -0.5。
         """
     ).strip()
 
@@ -1123,11 +1376,22 @@ def _request_compile_fixes(
     llm: LLM,
     error_output: str,
     payload: Dict[str, Dict[str, Any]],
+    history_context: Optional[str] = None,
 ) -> List[Dict[str, Dict[str, Any]]]:
     if not payload:
         return []
 
     payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    history_section = ""
+    if history_context:
+        history_block = textwrap.dedent(
+            f"""
+            ### 历史修复轨迹
+            以下是最近几轮改错的摘要，请不要重复相同的思路，尝试新的修复策略：
+            {history_context}
+            """
+        ).strip()
+        history_section = "\n\n" + history_block
     prompt = textwrap.dedent(
         f"""
         你是一名经验丰富的 Rust 修复工程师。请依据编译错误以及给定的文件内容，仔细分析错误的原因，对代码编译报错修复以通过 `cargo check`。
@@ -1148,8 +1412,7 @@ def _request_compile_fixes(
         ### 当前编译错误
         {_truncate_text(error_output, 20000)}
 
-        ### 改错经验
-        访问 Rc<RefCell<T>>的内部字段时，都需要先调用 borrow()或 borrow_mut()来获取引用
+        {history_section}
 
         ### 当前文件内容
         {payload_json}
@@ -1347,16 +1610,45 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
     targets = _extract_fix_targets(llm, error_output)
     print(f"LLM 识别到需要修复的符号: {targets}")
     if not targets:
+        attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+        error_excerpt = _truncate_text((error_output or "").strip(), 1500)
+        note_lines = [
+            f"尝试 {attempt_no}: 失败",
+            "改动摘要: 无",
+            "编译错误摘要:",
+            error_excerpt or "无输出",
+            "附注: LLM 未能识别需要修改的文件或符号。",
+        ]
+        TRAJECTORY_MEMORY.add("\n".join(note_lines).strip())
         print("提示: LLM 未能识别需要修改的文件或符号。")
         return False
 
     payload, metadata = _build_fix_payload(project_root, targets)
     if not payload:
+        attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+        note_lines = [
+            f"尝试 {attempt_no}: 失败",
+            "改动摘要: 无",
+            "编译错误摘要:",
+            "无法构建自动修复所需的上下文。",
+        ]
+        TRAJECTORY_MEMORY.add("\n".join(note_lines).strip())
         print("提示: 无法构建自动修复所需的上下文。")
         return False
 
-    candidates = _request_compile_fixes(llm, error_output, payload)
+    history_context = TRAJECTORY_MEMORY.get_latest(3)
+    candidates = _request_compile_fixes(llm, error_output, payload, history_context=history_context)
     if not candidates:
+        attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+        error_excerpt = _truncate_text((error_output or "").strip(), 1500)
+        note_lines = [
+            f"尝试 {attempt_no}: 失败",
+            "改动摘要: 无",
+            "编译错误摘要:",
+            error_excerpt or "无输出",
+            "附注: LLM 未返回有效的修复结果。",
+        ]
+        TRAJECTORY_MEMORY.add("\n".join(note_lines).strip())
         print("提示: LLM 未返回有效的修复结果。")
         return False
 
@@ -1373,6 +1665,16 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         candidate_markers.append(marker)
 
     if not filtered_candidates:
+        attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+        error_excerpt = _truncate_text((error_output or "").strip(), 1500)
+        note_lines = [
+            f"尝试 {attempt_no}: 失败",
+            "改动摘要: 无",
+            "编译错误摘要:",
+            error_excerpt or "无输出",
+            "附注: 候选修复均与历史重复，未执行新的 cargo check。",
+        ]
+        TRAJECTORY_MEMORY.add("\n".join(note_lines).strip())
         print("提示: 候选修复均与历史重复，跳过。")
         return False
 
@@ -1436,6 +1738,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
                     baseline_output,
                     output,
                     candidate,
+                    history_context
                 )
                 evaluation_cache[cache_key] = (candidate_score, evaluation_reason)
 
@@ -1474,6 +1777,18 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
 
     _apply_fix_payload(project_root, metadata, payload, best_payload)
 
+    attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+    history_entry = _build_history_entry(
+        attempt_no,
+        payload,
+        best_payload,
+        metadata,
+        best_output,
+        best_success,
+        baseline_output,
+    )
+    TRAJECTORY_MEMORY.add(history_entry)
+
     return best_success
 
 
@@ -1483,6 +1798,7 @@ def _compile_after_translation(
 ) -> bool:
     # Compile immediately after filling a function to catch regressions early.
     _ = failing_symbol  # 保留参数以兼容调用方，当前流程不区分具体符号
+    TRAJECTORY_MEMORY.clear()
     max_fix_rounds = 30
 
     for round_idx in range(max_fix_rounds + 1):
@@ -1697,13 +2013,6 @@ def main() -> None:
             }
         )
 
-    module_last_index: Dict[Path, int] = {}
-    for idx, task in enumerate(tasks):
-        for dest_path in task["dest_paths"]:
-            module_last_index[dest_path] = idx
-
-    pending_modules: Set[Path] = set()
-
     for idx, task in enumerate(tasks):
         c_name = task["c_name"]
         rust_name = task["rust_name"]
@@ -1715,7 +2024,6 @@ def main() -> None:
         if existing_paths and not has_stub:
             print(f"跳过 {rust_name}，未检测到 unimplemented!() 存根。")
             translated_rust.add(rust_name)
-            pending_modules.update(existing_paths)
         else:
             items, mapping_c2r, rust_placeholders = _translate_symbol(
                 symbol,
@@ -1777,41 +2085,16 @@ def main() -> None:
                     if not updated_paths:
                         updated_paths.update(task["dest_paths"])
 
-                    immediate_paths = {p for p in updated_paths if p not in module_last_index}
-                    if immediate_paths:
-                        compile_ok = _compile_after_translation(
-                            immediate_paths,
-                            failing_symbol=rust_symbol,
-                        )
-                        if not compile_ok:
-                            raise RuntimeError(f"{rust_symbol} 编译失败，已尝试自动修复。")
-                    pending_modules.update(updated_paths - immediate_paths)
+                    compile_ok = _compile_after_translation(
+                        updated_paths,
+                        failing_symbol=rust_symbol,
+                    )
+                    if not compile_ok:
+                        raise RuntimeError(f"{rust_symbol} 编译失败，已尝试自动修复。")
                 else:
                     dest_paths = task["dest_paths"]
                     target_hint = dest_paths[0].as_posix() if dest_paths else "未知"
                     print(f"未找到 {rust_symbol} 的 unimplemented!() 存根，文件：{target_hint}")
-
-        ready_paths = {
-            path
-            for path in pending_modules
-            if module_last_index.get(path) == idx
-        }
-        if ready_paths:
-            compile_ok = _compile_after_translation(
-                ready_paths,
-                failing_symbol=None,
-            )
-            if not compile_ok:
-                raise RuntimeError("模块编译失败，已尝试自动修复。")
-            pending_modules.difference_update(ready_paths)
-
-    if pending_modules:
-        compile_ok = _compile_after_translation(
-            pending_modules,
-            failing_symbol=None,
-        )
-        if not compile_ok:
-            raise RuntimeError("仍有模块未通过编译，已尝试自动修复。")
 
     print("填充完成。再次运行 cargo check 验证编译结果。")
 
