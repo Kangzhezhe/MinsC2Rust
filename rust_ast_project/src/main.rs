@@ -1,12 +1,13 @@
 use proc_macro2::Span;
 use serde::Serialize;
+use std::cmp::Ordering;
 use std::env;
 use std::fs;
 use std::path::Path;
-use syn::{parse_file, spanned::Spanned, Item};
+use syn::{parse_file, spanned::Spanned, Item, Type};
 use walkdir::{DirEntry, WalkDir};
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct SymbolMatch {
     name: String,
     kind: String,
@@ -205,6 +206,69 @@ fn record_match(
     });
 }
 
+fn type_matches_target(ty: &Type, target: &str) -> bool {
+    match ty {
+        Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident == target)
+            .unwrap_or(false),
+        Type::Reference(reference) => type_matches_target(&reference.elem, target),
+        Type::Group(group) => type_matches_target(&group.elem, target),
+        Type::Paren(paren) => type_matches_target(&paren.elem, target),
+        _ => false,
+    }
+}
+
+fn merge_adjacent_impls(matches: &mut Vec<SymbolMatch>) {
+    matches.sort_by(|a, b| {
+        let file_ord = a.file.cmp(&b.file);
+        if file_ord == Ordering::Equal {
+            a.start_line.cmp(&b.start_line)
+        } else {
+            file_ord
+        }
+    });
+
+    let mut merged: Vec<SymbolMatch> = Vec::with_capacity(matches.len());
+    let mut idx = 0;
+
+    while idx < matches.len() {
+        let current = matches[idx].clone();
+
+        if current.kind == "Struct" {
+            let mut combined = current;
+            let mut next_idx = idx + 1;
+
+            while next_idx < matches.len() {
+                let candidate = &matches[next_idx];
+                if candidate.kind == "Impl"
+                    && candidate.name == combined.name
+                    && candidate.file == combined.file
+                {
+                    if !combined.code.ends_with('\n') {
+                        combined.code.push('\n');
+                    }
+                    combined.code.push_str(&candidate.code);
+                    combined.end_line = candidate.end_line;
+                    next_idx += 1;
+                } else {
+                    break;
+                }
+            }
+
+            merged.push(combined);
+            idx = next_idx;
+        } else {
+            merged.push(current);
+            idx += 1;
+        }
+    }
+
+    *matches = merged;
+}
+
 fn extract_symbol_from_items(
     items: &[Item],
     target: &str,
@@ -297,6 +361,18 @@ fn extract_symbol_from_items(
                     content,
                     line_starts,
                     union_item.span(),
+                    project_root,
+                );
+            }
+            Item::Impl(impl_item) if type_matches_target(&impl_item.self_ty, target) => {
+                record_match(
+                    results,
+                    target,
+                    "Impl",
+                    file_path,
+                    content,
+                    line_starts,
+                    impl_item.span(),
                     project_root,
                 );
             }
@@ -403,6 +479,8 @@ fn extract_symbol_from_project(
             Some(project_root),
         );
     }
+
+    merge_adjacent_impls(&mut matches);
 
     Ok(SymbolExtraction {
         symbol: symbol.to_string(),

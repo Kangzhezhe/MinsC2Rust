@@ -20,7 +20,7 @@ from analyzer.symbol_model import normalize_symbol_type
 from llm.llm import LLM
 from llm.template_parser.template_parser import TemplateParser
 from collections import deque
-
+from llm.rag import build_csv_mapping_collection, search_knowledge_base
 from analyzer.config import load_rust_output_dir
 
 from test import (
@@ -124,8 +124,14 @@ class Memory:
 
 
 TRAJECTORY_MEMORY = Memory(max_size=20, memory_type="历史改错")
+SAVE_SUCCESS_EXPERIENCE = False
 
 SUCCESS_EXPERIENCE_CSV = Path(__file__).resolve().parent / "data" / "success_experience.csv"
+SUCCESS_EXPERIENCE_COLLECTION = "success_experience"
+SUCCESS_EXPERIENCE_TOP_N = 3
+_SUCCESS_EXPERIENCE_RAG_STATE: Dict[str, Any] = {"mtime": None, "ready": False}
+_SUCCESS_EXPERIENCE_CACHE: Dict[str, Any] = {"anchor_attempt": None, "context": ""}
+_SUCCESS_EXPERIENCE_PERIOD = 3
 
 
 def _serialize_trajectory(memory: Memory) -> str:
@@ -242,6 +248,87 @@ def _record_success_experience(memory: Memory, success_entry: str) -> None:
     if not summary.experience.strip():
         summary.experience = "- 本次修复成功，总结生成信息为空"
     _append_success_record(history_text, summary)
+
+
+def _ensure_success_experience_knowledge_base() -> bool:
+    global _SUCCESS_EXPERIENCE_RAG_STATE
+    if not SUCCESS_EXPERIENCE_CSV.exists():
+        return False
+    try:
+        current_mtime = SUCCESS_EXPERIENCE_CSV.stat().st_mtime
+    except OSError:
+        return False
+
+    state_mtime = _SUCCESS_EXPERIENCE_RAG_STATE.get("mtime")
+    if state_mtime == current_mtime and _SUCCESS_EXPERIENCE_RAG_STATE.get("ready"):
+        return True
+
+    try:
+        build_csv_mapping_collection(
+            str(SUCCESS_EXPERIENCE_CSV),
+            key_fields=["trajectory"],
+            collection_name=SUCCESS_EXPERIENCE_COLLECTION,
+            id_prefix="success_experience",
+        )
+    except Exception as exc:
+        print(f"提示: 构建成功经验知识库失败：{exc}")
+        _SUCCESS_EXPERIENCE_RAG_STATE = {"mtime": current_mtime, "ready": False}
+        return False
+
+    _SUCCESS_EXPERIENCE_RAG_STATE = {"mtime": current_mtime, "ready": True}
+    return True
+
+
+def _retrieve_success_experience_context(query_text: str, top_n: int = SUCCESS_EXPERIENCE_TOP_N) -> str:
+    if not isinstance(query_text, str) or not query_text.strip():
+        return ""
+    if not _ensure_success_experience_knowledge_base():
+        return ""
+
+    docs = []
+    try:
+        docs = search_knowledge_base(
+            _truncate_text(query_text.strip(), 10000),
+            collection_name=SUCCESS_EXPERIENCE_COLLECTION,
+            top_k=max(1, top_n*2),
+            use_rerank=True,
+            rerank_top_n=max(1, top_n),
+        )
+    except Exception as exc:
+        print(f"提示: 检索成功经验失败：{exc}")
+        return ""
+
+    entries: List[str] = []
+    for idx, doc in enumerate(docs, start=1):
+        try:
+            payload = json.loads(doc)
+        except Exception:
+            continue
+
+        value = payload.get("value") if isinstance(payload, dict) else None
+        key_data = payload.get("key") if isinstance(payload, dict) else None
+        if not isinstance(value, dict):
+            value = {}
+        if not isinstance(key_data, dict):
+            key_data = {}
+
+        error_types = (value.get("error_types") or key_data.get("error_types") or "").strip()
+        error_codes = (value.get("error_codes") or key_data.get("error_codes") or "").strip()
+        experience_text = value.get("experience") or ""
+        if not isinstance(experience_text, str) or not experience_text.strip():
+            continue
+
+        header_parts: List[str] = []
+        if error_types:
+            header_parts.append(f"错误类型: {error_types}")
+        if error_codes:
+            header_parts.append(f"错误码: {error_codes}")
+
+        header = f"[案例 {idx}] " + (" | ".join(header_parts) if header_parts else "历史经验")
+        body = _truncate_text(experience_text.strip(), 800)
+        entries.append(f"{header}\n{body}")
+
+    return "\n\n".join(entries[:top_n])
 
 
 def gather_dependency_context_from_project(
@@ -1012,7 +1099,7 @@ def _extract_fix_targets(llm: LLM, error_output: str) -> Dict[str, List[str]]:
         你是一名资深的 Rust 构建工程师（SWE Agent）。请阅读下面的 `cargo check` 编译错误日志，并严格按以下步骤执行：
 
         1. 解析日志中每条 `--> 路径:行:列`，收集所有报错文件及行号。
-        2. 对每个报错行号，必须先调用 `lsp_list_document_symbols` 获得相关文件的候选符号和行号范围
+        2. 对每个报错行号，必须先调用 `lsp_list_document_symbols, include_children=False` 获得相关文件的候选符号和行号范围
         2. 然后通过`lsp_list_symbol_definitions`（或read_file）获取覆盖该行号的完整函数定义获得完整函数定义代码。
         3. 根据获得的代码上下文，所有 Rust 文件及符号。若无法定位具体符号，返回空数组。
         4. 结合编译报错与获得的上下文，最后输出输出严格的 JSON，获得可能需要修改的文件及符号列表。
@@ -1502,6 +1589,7 @@ def _request_compile_fixes(
     error_output: str,
     payload: Dict[str, Dict[str, Any]],
     history_context: Optional[str] = None,
+    experience_context: Optional[str] = None,
 ) -> List[Dict[str, Dict[str, Any]]]:
     if not payload:
         return []
@@ -1517,6 +1605,16 @@ def _request_compile_fixes(
             """
         ).strip()
         history_section = "\n\n" + history_block
+    experience_section = ""
+    if experience_context:
+        experience_block = textwrap.dedent(
+            f"""
+            ### 历史成功经验参考
+            以下是与当前错误特征相似的经验总结，可尝试借鉴：
+            {experience_context}
+            """
+        ).strip()
+        experience_section = "\n\n" + experience_block
     prompt = textwrap.dedent(
         f"""
         你是一名经验丰富的 Rust 修复工程师。请依据编译错误以及给定的文件内容，仔细分析错误的原因，对代码编译报错修复以通过 `cargo check`。
@@ -1537,7 +1635,7 @@ def _request_compile_fixes(
         ### 当前编译错误
         {_truncate_text(error_output, 20000)}
 
-        {history_section}
+        {history_section}{experience_section}
 
         ### 当前文件内容
         {payload_json}
@@ -1761,8 +1859,46 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         print("提示: 无法构建自动修复所需的上下文。")
         return False
 
-    history_context = TRAJECTORY_MEMORY.get_latest(8)
-    candidates = _request_compile_fixes(llm, error_output, payload, history_context=history_context)
+    history_context = TRAJECTORY_MEMORY.get_latest(5)
+    attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+    block_anchor = ((attempt_no - 1) // _SUCCESS_EXPERIENCE_PERIOD) * _SUCCESS_EXPERIENCE_PERIOD if attempt_no > 0 else 0
+
+    experience_context = ""
+    cache_anchor = _SUCCESS_EXPERIENCE_CACHE.get("anchor_attempt")
+    cached_context = _SUCCESS_EXPERIENCE_CACHE.get("context")
+    if block_anchor and cache_anchor == block_anchor:
+        if isinstance(cached_context, str) and cached_context.strip():
+            experience_context = cached_context
+            print(f"尝试 {attempt_no}: 复用第 {block_anchor} 轮缓存的历史经验。")
+        elif isinstance(cached_context, str):
+            experience_context = ""
+
+    should_refresh_cache = attempt_no >= _SUCCESS_EXPERIENCE_PERIOD and attempt_no % _SUCCESS_EXPERIENCE_PERIOD == 0
+    if should_refresh_cache:
+        query_parts: List[str] = []
+        serialized_history = _serialize_trajectory(TRAJECTORY_MEMORY)
+        if serialized_history:
+            query_parts.append(serialized_history)
+        if error_output:
+            query_parts.append(_truncate_text(error_output, 4000))
+        query_text = "\n\n".join(part for part in query_parts if part.strip())
+        new_context = ""
+        if query_text:
+            new_context = _retrieve_success_experience_context(query_text)
+        _SUCCESS_EXPERIENCE_CACHE["anchor_attempt"] = attempt_no
+        _SUCCESS_EXPERIENCE_CACHE["context"] = new_context or ""
+        if new_context:
+            print(f"尝试 {attempt_no}: 已缓存历史成功经验，后续三轮将优先参考。")
+        else:
+            print(f"尝试 {attempt_no}: 未检索到可缓存的历史成功经验。")
+
+    candidates = _request_compile_fixes(
+        llm,
+        error_output,
+        payload,
+        history_context=history_context,
+        experience_context=experience_context,
+    )
     if not candidates:
         attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
         error_excerpt = _truncate_text((error_output or "").strip(), 1500)
@@ -1898,7 +2034,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         if marker:
             _LLM_FIX_PAYLOAD_HISTORY.add(marker)
 
-    print(f"应用最佳候选 {best_index + 1}/{len(candidates)}，cargo check {'通过' if best_success else '仍未通过'}。")
+    print(f"attempt {attempt_no} 应用最佳候选 {best_index + 1}/{len(candidates)}，cargo check {'通过' if best_success else '仍未通过'}。")
 
     _apply_fix_payload(project_root, metadata, payload, best_payload)
 
@@ -1916,7 +2052,8 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
 
     if best_success:
         try:
-            _record_success_experience(TRAJECTORY_MEMORY, history_entry)
+            if SAVE_SUCCESS_EXPERIENCE:
+                _record_success_experience(TRAJECTORY_MEMORY, history_entry)
         except Exception:
             pass
 
