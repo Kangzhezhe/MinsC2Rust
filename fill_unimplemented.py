@@ -1,3 +1,4 @@
+import csv
 import difflib
 import json
 import os
@@ -96,6 +97,12 @@ class CandidateEvaluationModel(BaseModel):
     reason: str = ""
 
 
+class SuccessExperienceModel(BaseModel):
+    error_types: str = ""
+    error_codes: str = ""
+    experience: str = ""
+
+
 class Memory:
     def __init__(self, max_size=3, memory_type="Reflection"):
         self.mem = deque(maxlen=max_size)  # 限制记忆长度
@@ -116,7 +123,125 @@ class Memory:
 
 
 
-TRAJECTORY_MEMORY = Memory(max_size=5, memory_type="历史改错")
+TRAJECTORY_MEMORY = Memory(max_size=20, memory_type="历史改错")
+
+SUCCESS_EXPERIENCE_CSV = Path(__file__).resolve().parent / "data" / "success_experience.csv"
+
+
+def _serialize_trajectory(memory: Memory) -> str:
+    if not isinstance(memory, Memory) or not memory.mem:
+        return ""
+    serialized = memory.get_context()
+    if serialized:
+        return serialized
+    return "\n\n".join(str(entry) for entry in memory.mem if isinstance(entry, str)).strip()
+
+
+def _summarize_success_experience(
+    history_text: str, success_entry: str
+) -> Optional[SuccessExperienceModel]:
+    compact_history = _truncate_text((history_text or "").strip(), 10000)
+    compact_success = _truncate_text((success_entry or "").strip(), 5000)
+    if not compact_history and not compact_success:
+        return None
+
+    prompt = textwrap.dedent(
+        f"""
+        你是一名资深的 Rust 自动修复总结专家。下面提供了一次自动修复的完整尝试轨迹，其中最后一条记录代表成功方案。
+        请从这些信息中提炼 3-5 条可复用的经验，总结哪些思路/策略帮助最终通过 `cargo check`。
+
+        输出要求：
+        - 使用中文。
+    - 必须按照要求输出一个 JSON 对象。
+    - `error_types` 为相关错误类型文本（如 method `XXX` not found for this type parameter）的去重条目，使用空格分隔；无信息时输出空字符串。
+    - `error_codes` 为错误编码（如 E0XXXX），使用空格分隔；无信息时输出空字符串。
+        - `experience` 保留以 "- " 开头的条目式总结，条目间使用换行分隔。
+        - 严格遵循 JSON 语法，不要添加额外文本、注释或代码块标记。
+
+        ### 自动修复轨迹
+        {compact_history}
+
+        ### 最新成功记录
+        {compact_success}
+        """
+    ).strip()
+
+
+    parser = TemplateParser(
+        "{result:json:SuccessExperienceModel}",
+        model_map={"SuccessExperienceModel": SuccessExperienceModel},
+    )
+
+    try:
+        llm = LLM(logger=False)
+        response = llm.call(prompt, parser=parser, max_retry=3)
+    except Exception:
+        response = None
+
+    raw_text = ""
+    if isinstance(response, dict):
+        raw_text = str(response.get("raw_output") or "")
+        if response.get("success"):
+            data = response.get("data", {}).get("result")
+            if isinstance(data, SuccessExperienceModel):
+                return data
+            if isinstance(data, dict):
+                try:
+                    return SuccessExperienceModel(**data)
+                except Exception:
+                    pass
+    elif isinstance(response, str):
+        raw_text = response
+    elif response is not None:
+        raw_text = str(response)
+
+    cleaned = (raw_text or "").strip()
+    if not cleaned:
+        return None
+
+    experience_text = cleaned if cleaned.startswith("- ") else f"- {cleaned}"
+    return SuccessExperienceModel(experience=experience_text)
+
+
+def _append_success_record(history_text: str, summary: SuccessExperienceModel) -> None:
+    try:
+        SUCCESS_EXPERIENCE_CSV.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+
+    need_header = not SUCCESS_EXPERIENCE_CSV.exists() or SUCCESS_EXPERIENCE_CSV.stat().st_size == 0
+    try:
+        with SUCCESS_EXPERIENCE_CSV.open("a", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            if need_header:
+                writer.writerow([
+                    "trajectory",
+                    "error_types",
+                    "error_codes",
+                    "experience",
+                ])
+            writer.writerow(
+                [
+                    history_text,
+                    summary.error_types.strip(),
+                    summary.error_codes.strip(),
+                    summary.experience.strip(),
+                ]
+            )
+    except OSError:
+        return
+
+
+def _record_success_experience(memory: Memory, success_entry: str) -> None:
+    history_text = _serialize_trajectory(memory)
+    if not history_text:
+        history_text = success_entry.strip()
+    summary = _summarize_success_experience(history_text, success_entry)
+    if summary is None:
+        summary = SuccessExperienceModel(experience="- 本次修复成功，总结生成失败")
+    if not summary.experience.strip():
+        summary.experience = "- 本次修复成功，总结生成信息为空"
+    _append_success_record(history_text, summary)
 
 
 def gather_dependency_context_from_project(
@@ -1406,7 +1531,7 @@ def _request_compile_fixes(
         - `extra` 与输入完全一致时请省略该键，以减小输出体积。
 
         - 输出必须是 JSON 数组，数组的每个元素为一个候选修复可能，一个候选可能包含多个文件的修改，形如 {{文件路径: {{符号: 更新后的代码, "extra": 片段数组}}}}。
-        - 给出尽量多的修复候选操作，从而提高成功率，至少给出 1 个候选，推荐 2 个以上；
+        - 给出尽量多的不同思路不同方向的修复候选操作，从而提高成功率，至少给出 1 个候选，推荐 3 个以上；
         - 保持现有的缩进与风格，不要引入无关改动。
 
         ### 当前编译错误
@@ -1636,7 +1761,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         print("提示: 无法构建自动修复所需的上下文。")
         return False
 
-    history_context = TRAJECTORY_MEMORY.get_latest(3)
+    history_context = TRAJECTORY_MEMORY.get_latest(8)
     candidates = _request_compile_fixes(llm, error_output, payload, history_context=history_context)
     if not candidates:
         attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
@@ -1788,6 +1913,12 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         baseline_output,
     )
     TRAJECTORY_MEMORY.add(history_entry)
+
+    if best_success:
+        try:
+            _record_success_experience(TRAJECTORY_MEMORY, history_entry)
+        except Exception:
+            pass
 
     return best_success
 
