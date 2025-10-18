@@ -8,9 +8,11 @@ import tempfile
 import textwrap
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
+
+from element_translation import _close_swe_agent_instance
 try:  # Pydantic v2
     from pydantic import RootModel
 except ImportError:  # Pydantic v1 fallback
@@ -23,7 +25,7 @@ from collections import deque
 from llm.rag import build_csv_mapping_collection, search_knowledge_base
 from analyzer.config import load_rust_output_dir
 
-from test import (
+from element_translation import (
     FUNCTION_SYMBOL_TYPES,
     NON_FUNCTION_SYMBOL_TYPES,
     RustBatch,
@@ -1109,7 +1111,7 @@ def _extract_fix_targets(llm: LLM, error_output: str) -> Dict[str, List[str]]:
         请确保在确认所有报错位置的上下文后再生成最终 JSON。
 
         ### 编译错误日志
-        {_truncate_text(error_output, 20000)}
+        {_truncate_text(error_output, 10000)}
         """
     ).strip()
 
@@ -1147,20 +1149,41 @@ def _extract_fix_targets(llm: LLM, error_output: str) -> Dict[str, List[str]]:
             normalized[path.strip()] = filtered
 
     forced_symbols = _force_symbols_from_error_output(agent, rust_output_dir, error_output)
+    forced_targets: Dict[str, List[str]] = {}
     if forced_symbols:
         for rel_path, symbol_set in forced_symbols.items():
+            if not symbol_set:
+                continue
             bucket = normalized.setdefault(rel_path, [])
             existing: Set[str] = set(bucket)
             for symbol in sorted(symbol_set):
-                if symbol in existing:
-                    continue
-                bucket.append(symbol)
-                existing.add(symbol)
+                if symbol not in existing:
+                    bucket.append(symbol)
+                    existing.add(symbol)
+            forced_targets[rel_path] = sorted(symbol_set)
 
     if not normalized:
         return {}
 
-    return _augment_fix_targets_with_dependencies(normalized, rust_output_dir)
+    print("强制修复目标符号:", forced_targets)
+
+    if forced_targets:
+        dependency_targets = _augment_fix_targets_with_dependencies(
+            forced_targets,
+            rust_output_dir,
+        )
+        for dep_path, dep_symbols in dependency_targets.items():
+            if not dep_symbols:
+                continue
+            bucket = normalized.setdefault(dep_path, [])
+            existing = set(bucket)
+            for dep_symbol in dep_symbols:
+                if dep_symbol in existing:
+                    continue
+                bucket.append(dep_symbol)
+                existing.add(dep_symbol)
+
+    return normalized
 
 
 def _augment_fix_targets_with_dependencies(
@@ -1629,7 +1652,7 @@ def _request_compile_fixes(
         - `extra` 与输入完全一致时请省略该键，以减小输出体积。
 
         - 输出必须是 JSON 数组，数组的每个元素为一个候选修复可能，一个候选可能包含多个文件的修改，形如 {{文件路径: {{符号: 更新后的代码, "extra": 片段数组}}}}。
-        - 给出尽量多的不同思路不同方向的修复候选操作，从而提高成功率，至少给出 1 个候选，推荐 3 个以上；
+        - 给出尽量多的不同思路不同方向的修复候选操作，从而提高成功率，至少给出 1 个候选，推荐 3 个左右，最多不超过 5 个，请根据编译错误的复杂度，自行判断需要给出多少个修复候选；
         - 保持现有的缩进与风格，不要引入无关改动。
 
         ### 当前编译错误
@@ -2023,6 +2046,10 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
             best_success = compile_ok
             best_score = candidate_score
 
+            if best_success:
+                # 一旦发现通过的候选，提前结束后续候选评估以节省时间
+                break
+
     _restore_file_contents(project_root, snapshots)
 
     if best_payload is None:
@@ -2063,9 +2090,9 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
 def _compile_after_translation(
     dest_paths: Set[Path],
     failing_symbol: Optional[str] = None,
+    regenerate_callback: Optional[Callable[[], bool]] = None,
 ) -> bool:
     # Compile immediately after filling a function to catch regressions early.
-    _ = failing_symbol  # 保留参数以兼容调用方，当前流程不区分具体符号
     TRAJECTORY_MEMORY.clear()
     max_fix_rounds = 30
 
@@ -2093,6 +2120,13 @@ def _compile_after_translation(
             return False
 
         fix_ok = _attempt_llm_compile_fix(project_root, raw_output)
+
+        if regenerate_callback and not fix_ok and (round_idx + 1) % 10 == 0:
+            target_name = failing_symbol or "当前符号"
+            print(f"提示: {target_name} 连续 {round_idx + 1} 次自动修复未通过，尝试重新生成函数体。")
+            regen_ok = regenerate_callback()
+            if not regen_ok:
+                print(f"提示: 重新生成 {target_name} 的实现失败，将继续沿用现有代码。")
 
     print("达到最大自动修复次数，仍未通过编译。")
     return False
@@ -2179,6 +2213,82 @@ def _replace_function(dest_path: Path, rust_name: str, new_code: str) -> bool:
     return True
 
 
+def _generate_and_apply_rust_impl(
+    project_root: Path,
+    symbol: Dict[str, Any],
+    rust_symbol: str,
+    mapping: Dict[str, Optional[str]],
+    rust_defs: Dict[str, str],
+    translated_rust: Set[str],
+    dest_paths: List[Path],
+) -> Tuple[bool, Set[Path]]:
+    try:
+        items, mapping_c2r, rust_placeholders = _translate_symbol(
+            symbol,
+            mapping,
+            rust_defs,
+            [rust_symbol],
+        )
+    except Exception as exc:
+        print(f"提示: 生成 {rust_symbol} 的实现失败: {exc}")
+        return False, set()
+
+    for mapped_c, mapped_rust in mapping_c2r.items():
+        if not mapped_c or mapped_rust is None:
+            continue
+        mapping[mapped_c] = mapped_rust
+        mapping[_normalize_c_key(mapped_c)] = mapped_rust
+
+    name_to_code = {
+        item.get("name"): item.get("code")
+        for item in items
+        if isinstance(item.get("name"), str) and isinstance(item.get("code"), str)
+    }
+
+    rust_code = name_to_code.get(rust_symbol)
+    if not isinstance(rust_code, str):
+        print(f"提示: LLM 输出缺少 {rust_symbol} 的实现。")
+        return False, set()
+
+    replaced_any = False
+    updated_paths: Set[Path] = set()
+    placeholder_matches = rust_placeholders.get(rust_symbol, [])
+    for placeholder in placeholder_matches:
+        file_rel = placeholder.get("file")
+        start_line = placeholder.get("start_line")
+        end_line = placeholder.get("end_line")
+        if not isinstance(file_rel, str) or not isinstance(start_line, int) or not isinstance(end_line, int):
+            continue
+        dest_path = project_root / file_rel
+        replaced = _replace_with_span(dest_path, start_line, end_line, rust_code)
+        if replaced:
+            rust_defs[rust_symbol] = rust_code
+            translated_rust.add(rust_symbol)
+            updated_paths.add(dest_path)
+            replaced_any = True
+            break
+
+    concrete_dest_paths = list(dest_paths)
+
+    if not replaced_any:
+        for dest_path in concrete_dest_paths:
+            if not dest_path.exists():
+                continue
+            replaced = _replace_function(dest_path, rust_symbol, rust_code)
+            if replaced:
+                rust_defs[rust_symbol] = rust_code
+                translated_rust.add(rust_symbol)
+                updated_paths.add(dest_path)
+                replaced_any = True
+                break
+
+    if not replaced_any:
+        target_hint = concrete_dest_paths[0].as_posix() if concrete_dest_paths else "未知"
+        print(f"未找到 {rust_symbol} 的 unimplemented!() 存根，文件：{target_hint}")
+
+    return replaced_any, updated_paths
+
+
 def _has_unimplemented_stub(project_root: Path, rust_name: str, dest_paths: List[Path]) -> bool:
     try:
         matches = _run_rust_symbol_extractor(project_root, rust_name)
@@ -2261,6 +2371,10 @@ def main() -> None:
     mapping: Dict[str, Optional[str]] = dict(loaded_mapping)
     rust_defs: Dict[str, str] = {}
     translated_rust: Set[str] = set()
+
+    # 在开始批量转译前，先确保当前工程能够通过编译
+    if not _compile_after_translation(set()):
+        raise RuntimeError("初始 cargo check 未通过，自动修复流程已中止。")
 
     tasks: List[Dict[str, Any]] = []
     for c_name, rust_name in sequence:
@@ -2353,9 +2467,27 @@ def main() -> None:
                     if not updated_paths:
                         updated_paths.update(task["dest_paths"])
 
+                    def regenerate_function_body() -> bool:
+                        print(f"提示: 重试过程中重新生成 {rust_symbol} 的 Rust 实现。")
+                        success, regen_paths = _generate_and_apply_rust_impl(
+                            project_root,
+                            symbol,
+                            rust_symbol,
+                            mapping,
+                            rust_defs,
+                            translated_rust,
+                            dest_paths,
+                        )
+                        if success and regen_paths:
+                            updated_paths.update(regen_paths)
+                        elif success and task["dest_paths"]:
+                            updated_paths.update(task["dest_paths"])
+                        return success
+
                     compile_ok = _compile_after_translation(
                         updated_paths,
                         failing_symbol=rust_symbol,
+                        regenerate_callback=regenerate_function_body,
                     )
                     if not compile_ok:
                         raise RuntimeError(f"{rust_symbol} 编译失败，已尝试自动修复。")
@@ -2365,6 +2497,8 @@ def main() -> None:
                     print(f"未找到 {rust_symbol} 的 unimplemented!() 存根，文件：{target_hint}")
 
     print("填充完成。再次运行 cargo check 验证编译结果。")
+
+    _close_swe_agent_instance()
 
 
 if __name__ == "__main__":

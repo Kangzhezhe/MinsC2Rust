@@ -264,8 +264,30 @@ class TemplateParser:
             return None
 
         depth = 0
+        in_string = False
+        escape = False
+        string_delim = ""
+
         for idx in range(start, length):
             ch = text[idx]
+
+            if in_string:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == string_delim:
+                    in_string = False
+                continue
+
+            if ch in ('"', "'"):
+                in_string = True
+                string_delim = ch
+                escape = False
+                continue
+
             if ch == open_char:
                 depth += 1
             elif ch == close_char:

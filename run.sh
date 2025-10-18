@@ -1,9 +1,8 @@
-cd Tool
-./run.sh Tool_py/configs/config_c_algorithm.ini
-./run_post_process.sh Tool_py/configs/config_c_algorithm.ini
+#!/usr/bin/env bash
+set -euo pipefail
 
-./run.sh Tool_py/configs/config_crown.ini 
-./run_post_process.sh Tool_py/configs/config_crown.ini
-
-cd ../Output
-python3 ./merge_metrics.py
+cd analyzer && ./test.sh
+cd ..
+python analyzer/build_rust_skeleton.py
+python element_translation.py
+python fill_unimplemented.py

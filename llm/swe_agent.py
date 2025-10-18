@@ -988,18 +988,23 @@ class SWEFileSystemTools:
             请使用提供的原始文件、上下文片段 <CONTEXT_SNIPPET> 以及仅包含占位符的编辑脚本 <PLACEHOLDER_EDIT>，生成目标片段的最终内容。
             特别注意：生成片段的开头与结尾字符必须与 <CONTEXT_SNIPPET> 的开头结尾完全一致，不允许新增、删除或调换任何额外字符（包括空格、换行、括号等）。
             比如说，CONTEXT_SNIPPET 是不完整的函数片段 `int add(int a, int b) {{ return a + b;`，那你生成的新片段也必须精确地从 `int` 开始，到 `+ b;` 结束，中间任何字符（包括空格、换行）都不能多也不能少（比如不要添加缺少的 `}}` ），否则就违反了这条要求。
+            编辑脚本格式：// ... existing code ...  表示省略的未修改代码，每一处处编辑采用类似diff的格式：未修改的上下文行原样保留；新增行前加 `+`；- 删除行前加 `-`；
+例如：
+// ... existing code ...
+-    println!("hello");
++    println!("hello, world");
++    return;
+// ... existing code ...
 
-
-            编辑脚本格式：使用 `// ... existing code ...` 表示未修改的连续上下文；在两个占位符之间写入最终应出现的代码。
             你需要把 <PLACEHOLDER_EDIT> 中的内容套入 <CONTEXT_SNIPPET>，输出编辑后的完整片段，同时保持未修改部分与原始片段逐字符一致。
+例如：
+代码可以是任何类型，编辑内容的格式如下：
+// ... existing code ... 
+第一处编辑 
+// ... existing code ... 
+第二处编辑 
+// ... existing code ... 
 
-示例格式：
-<EDIT>
-// ... existing code ...
-    println!("hello, world");
-    return;
-// ... existing code ...
-</EDIT>
 
 合并后的代码必须完全正确，不允许有任何漏改或多改。请确保所有空白字符保持不变，任何细微拼写错误都会导致编译失败或运行异常。
 
@@ -1019,7 +1024,26 @@ class SWEFileSystemTools:
 {edit_script}
 </PLACEHOLDER_EDIT>
 
-            请直接输出目标片段的最终版本，不要添加解释或额外文本。
+            请直接输出目标片段的最终版本，不要添加解释或额外文本。例如：
+<example>
+CONTEXT_SNIPPET:
+fn main() {{
+    println!("hello");
+}}
+INSTRUCTIONS: “把 println! 内容改成 hello, world 并在末尾加 return”
+PLACEHOLDER_EDIT:
+// ... existing code ...
+-    println!("hello");
++    println!("hello, world");
++    return;
+// ... existing code ...
+FINAL_SNIPPET:
+fn main() {{
+    println!("hello, world");
+    return;
+}}
+</example>
+
             """
         )
 
@@ -1078,29 +1102,46 @@ class SWEFileSystemTools:
         """用于创建或更新单个文件。在调用该工具前，必须通过 `read_file` 读取同一文件的目标片段，以确保拥有完整上下文，并尽量在一次操作中完成该片段的全部修改。
                 - `instructions` 需由第一人称的一句话组成，用来说明本次修改意图（例如“我会在 foo 函数中补全错误处理”）。
                 - `context_start_line` 与 `context_end_line` 必须覆盖最近几次 `read_file` 返回的行号范围；`code_edit` 中引用的所有上下文行都不能超出该闭区间。如果修改的行号范围太大，大于300，则分多次修改，但是每一次的修改范围都尽可能大。
-                - `code_edit` 只允许使用占位符方式描述修改：用 `// ... existing code ...` 标记未改动的上下文块，在任意两段占位符之间写入需要保留或替换的最终代码。
-                - 对于插入或替换，请在前后提供足够的原始上下文（建议不少于 3 行），并直接写出修改后的完整代码片段；删除操作通过保留前后占位符、直接省略目标行实现。
+                - 在 `code_edit` 中提供完整编辑内容，写法如下：
+                    1. `code_edit` 只允许使用占位符方式描述修改：用 `// ... existing code ...` 标记未改动的上下文块，在任意两段占位符之间写入需要保留或替换的最终代码。
+                    2. 对于插入或替换，请在前后提供足够的原始上下文（建议不少于 3 行），并直接写出修改后的完整代码片段；删除操作需要保留前后占位符和原始代码行。
+                    3. 采用类似与diff的格式：未修改的上下文行原样保留；新增行前一定要加标记 `+`；- 删除行前一定要加 `-`；不要省略没有显式标记的原始代码。
 
-示例（在 `print` 后插入一行日志）：
-<EDIT>
-// ... existing code ...
-        print!("hello");
-        log::info!("done");
-// ... existing code ...
-</EDIT>
 
-示例（替换某段逻辑）：
-<EDIT>
-// ... existing code ...
-        let value = compute();
-        if value.is_err() {
-                return Err(value.unwrap_err());
-        }
-// ... existing code ...
-</EDIT>
 
-“<EDIT>…</EDIT>” 标签用于帮助下游模型定位编辑脚本，实际调用时只需提供上述格式的内容。
+例如：如果你需要修改两个函数 add/sub，确保在函数定义前后各保留至少 3 行未改动的代码。
+- **Diff 示例（函数中间修改）**：
+    // ... existing code ...
+    fn add(a: i32, b: i32) -> i32 {
+-    let sum = a + b;
+-    sum
++    a + b
+    }
+    fn mul(a: i32, b: i32) -> i32 {
+    // ... existing code ...
+    fn sub(a: i32, b: i32) -> i32 {
+-    let diff = a - b
++    let diff = a - b;
+        diff
+    }
+    // ... existing code ...
+- **Diff 示例（文件开头插入）**：
++use crate::helpers::Foo;
++use crate::helpers::Bar;
+    fn main() {
+    // ... existing code ...
+- **Diff 示例（文件结尾追加）**：
+    // ... existing code ...
+    fn finalize() {
+        commit();
+    }
++pub fn cleanup() {
++    // TODO: implement
++}
+
+标签用于帮助下游模型定位编辑脚本，实际调用时只需提供上述格式的内容。
 - 不要在未加占位符的情况下省略原有代码，否则下游应用器会将缺失部分视作删除。
+- **reapply**: 如果你发现生成的diff并不是期望的，让更智能的模型基于同一段上下文和指令重新生成补丁。
 """
         MAX_EDIT_FILE_LENGTH = 300
         if not instructions or not instructions.strip():

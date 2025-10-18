@@ -1,7 +1,15 @@
 from pathlib import Path
 
-ROOT = Path("/home/mins/MinsC2Rust/output")
+ROOT = Path(__file__).resolve().parent / "output"
 
-for path in ROOT.rglob("*.rs"):
-    if path.name != "lib.rs" and path.is_file():
+if ROOT.exists():
+    for path in ROOT.rglob("*.rs"):
+        if not path.is_file():
+            continue
+        try:
+            rel_path = path.relative_to(ROOT)
+        except ValueError:
+            rel_path = path
+        if rel_path.as_posix() == "src/lib.rs":
+            continue
         path.write_text("", encoding="utf-8")

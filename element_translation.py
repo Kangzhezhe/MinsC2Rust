@@ -61,7 +61,7 @@ class BatchState(TypedDict, total=False):
     translated_symbols: List[str]
 
 
-TYPE_MAPPING_CSV = "c_to_rust_type_mapping.csv"
+TYPE_MAPPING_CSV = "data/c_to_rust_type_mapping.csv"
 TYPE_MAPPING_COLLECTION = "c_to_rust_type_mapping"
 TYPE_MAPPING_KEY_FIELDS = ["Type", "C 类型", "C 示例"]
 TYPE_MAPPING_TOP_K = 6
@@ -177,7 +177,7 @@ def _get_swe_agent_instance() -> Optional["SWEAgent"]:
 
     try:
         _SWE_AGENT_INSTANCE = SWEAgent(workspace_root=str(rust_root),logger=True,
-        max_iterations=30,
+        max_iterations=50,
         command_timeout=90,
         memory_strategy={"name": "summary", "token_trigger_max_tokens": 3000},
         )
@@ -468,6 +468,33 @@ def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
         print("SWE Agent 修复后仍未通过编译，请手动检查。")
         return False
         # raise RuntimeError("SWE Agent 修复后仍未通过编译，请手动检查。")
+
+
+def _snapshot_rust_files(file_paths: Set[Path]) -> Dict[Path, Optional[str]]:
+    snapshots: Dict[Path, Optional[str]] = {}
+    for path in sorted(file_paths):
+        try:
+            if path.exists():
+                snapshots[path] = path.read_text(encoding="utf-8")
+            else:
+                snapshots[path] = None
+        except Exception as exc:
+            print(f"记录快照失败: {path}: {exc}")
+            snapshots[path] = None
+    return snapshots
+
+
+def _restore_rust_files(snapshots: Dict[Path, Optional[str]]) -> None:
+    for path, content in snapshots.items():
+        try:
+            if content is None:
+                if path.exists():
+                    path.unlink()
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            print(f"恢复快照失败: {path}: {exc}")
 
 
 def _persist_batch_to_rust(
@@ -968,7 +995,7 @@ def build_batch_prompt(
     "输出对象必须包含键：items, mapping_c2r。\n"
     "- items: [{name, code, note}]\n"
         "- mapping_c2r: {c_name: rust_name | null}\n"
-    "允许的处理方式仅限 translate(生成新Rust实现)、map(复用已有实现，映射到已经转换完成的Rust符号) 与 delete(删除无意义符号，映射为null表示删除)。\n"
+    "允许的处理方式仅限 translate(生成新Rust实现)、map(复用已有实现，映射到已经转换完成的Rust符号) 与 delete(删除无意义符号，比如头文件宏，无意义的宏定义，为null表示删除，注意：有数据的常量不要删除)。\n"
     "note 字段为字符串，简单明确指明上述哪一种处理并给出原因，无额外说明可留空；\n"
     "规则：安全 Rust；不要多余说明；items.name 必须与 mapping_c2r 的值一致；"
         f"输入 items（idx/c_name/content）：\n{c_inputs}"
@@ -1200,13 +1227,16 @@ def _translation_node(state: BatchState) -> BatchState:
         aggregated_mapping.update(mapping_c2r)
 
         compile_success = False
-        for _ in range(COMPILE_MAX_RETRIES):
-            written_paths = _persist_batch_to_rust(working_batch, items, mapping_c2r, aggregated_mapping)
+        written_paths = _persist_batch_to_rust(working_batch, items, mapping_c2r, aggregated_mapping)
+        for attempt_index in range(COMPILE_MAX_RETRIES):
+            attempt_snapshots = _snapshot_rust_files(written_paths)
             compile_success = _run_swe_agent_compile(written_paths)
             if compile_success:
                 break
-            else:
-                print("------------------编译未通过，重试中...")
+            _restore_rust_files(attempt_snapshots)
+            print("------------------编译未通过，重试中...")
+        if not compile_success:
+            raise RuntimeError(f"SWE Agent 无法修复编译错误，批次 {batch.get('batch_id')} 失败。")
 
         aggregated_items = list(state.get("items", []))
         aggregated_items.extend(items)
@@ -1325,6 +1355,8 @@ def main():
         print(f"// {c_name} -> {rust_name}")
 
     _persist_mapping_c2r(mapping_c2r)
+
+    _close_swe_agent_instance()
 
 
 if __name__ == "__main__":
