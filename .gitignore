@@ -30,3 +30,5 @@ run.log
 output copy*
 
 contest/
+
+*.log
