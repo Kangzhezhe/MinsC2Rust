@@ -55,7 +55,7 @@ class RustBatch(BaseModel):
 class BatchState(TypedDict, total=False):
     remaining_batches: List[Dict[str, Any]]
     items: List[Dict[str, Any]]
-    mapping_c2r: Dict[str, Optional[str]]
+    mapping_c2r: Dict[str, "RustMappingValue"]
     history: List[Dict[str, Any]]
     error: str
     translated_symbols: List[str]
@@ -73,8 +73,18 @@ AUTO_DEPENDENCY_EXPANSION_LIMIT = 64
 FUNCTION_SYMBOL_TYPES: Set[str] = {"functions"}
 NON_FUNCTION_SYMBOL_TYPES: Set[str] = {"structs", "typedefs", "macros", "variables", "enums"}
 
+RUST_MAPPING_SEPARATOR = "|"
+RustMappingValue = Tuple[str, Optional[str]]
+
+
 def _symbol_primary_text(symbol: Dict[str, Any]) -> str:
     return symbol.get("full_declaration", "")
+
+
+def _normalize_path_like(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return _normalize_c_key(str(value))
 
 
 def _symbol_unique_key(symbol: Dict[str, Any]) -> Optional[str]:
@@ -89,9 +99,89 @@ def _symbol_unique_key(symbol: Dict[str, Any]) -> Optional[str]:
         or symbol.get("source_file")
         or symbol.get("path")
     )
-    file_path_norm = _normalize_c_key(str(file_path)) if file_path else ""
+    file_path_norm = _normalize_path_like(file_path)
 
     return "|".join([name, sym_type, file_path_norm])
+
+
+def _compose_c_mapping_key(name: Optional[str], file_path: Optional[str]) -> Optional[str]:
+    if not name or not file_path:
+        return None
+    return RUST_MAPPING_SEPARATOR.join([name, _normalize_path_like(file_path)])
+
+
+def _compose_c_mapping_key_for_symbol(symbol: Dict[str, Any]) -> Optional[str]:
+    name = symbol.get("name") or symbol.get("symbol") or symbol.get("id")
+    file_path = (
+        symbol.get("file_path")
+        or symbol.get("file")
+        or symbol.get("source_file")
+        or symbol.get("path")
+    )
+    return _compose_c_mapping_key(name, file_path)
+
+
+def _compose_rust_mapping_value(name: str, dest_path: Optional[Path]) -> RustMappingValue:
+    rel_path = None
+    if dest_path is not None:
+        rel_path = _normalize_path_like(dest_path.as_posix())
+    return name, rel_path
+
+
+def _mapping_value_name(value: Optional[RustMappingValue]) -> Optional[str]:
+    if not value:
+        return None
+    return value[0]
+
+
+def _mapping_value_path(value: Optional[RustMappingValue]) -> Optional[str]:
+    if not value:
+        return None
+    return value[1]
+
+
+def _mapping_value_to_string(value: RustMappingValue) -> str:
+    name, rel_path = value
+    if rel_path:
+        return RUST_MAPPING_SEPARATOR.join([name, rel_path])
+    return name
+
+
+def _parse_rust_mapping_string(raw_value: Any) -> Optional[RustMappingValue]:
+    if isinstance(raw_value, str):
+        parts = raw_value.split(RUST_MAPPING_SEPARATOR, 1)
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        if parts:
+            return parts[0], None
+    return None
+
+
+def _split_mapping_key(key: str) -> Tuple[str, Optional[str]]:
+    if not key:
+        return "", None
+    parts = key.split(RUST_MAPPING_SEPARATOR, 1)
+    name = parts[0]
+    path = parts[1] if len(parts) == 2 and parts[1] else None
+    return name, path
+
+
+def _find_mapping_value(
+    mapping: Dict[str, RustMappingValue],
+    name: str,
+    file_path: Optional[str] = None,
+) -> Optional[RustMappingValue]:
+    if not name:
+        return None
+    if file_path:
+        direct_key = _compose_c_mapping_key(name, file_path)
+        if direct_key and direct_key in mapping:
+            return mapping[direct_key]
+    for key, value in mapping.items():
+        key_name, _ = _split_mapping_key(key)
+        if key_name == name:
+            return value
+    return None
 
 _ANALYZER: Optional[Analyzer] = None
 _PROJECT_ROOT: Optional[Path] = None
@@ -277,6 +367,49 @@ def _map_c_path_to_rust_relative(rel_path: Path) -> Optional[Path]:
     return rel_path.with_name(new_name)
 
 
+def _build_mapping_for_symbols(
+    symbols: List[Dict[str, Any]],
+    raw_mapping: Dict[str, Optional[str]],
+) -> Dict[str, RustMappingValue]:
+    if not raw_mapping:
+        return {}
+
+    grouped: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for symbol in symbols:
+        name = (
+            symbol.get("name")
+            or symbol.get("symbol")
+            or symbol.get("id")
+        )
+        if not name:
+            continue
+        grouped[name].append(symbol)
+
+    resolved: Dict[str, RustMappingValue] = {}
+    for c_name, rust_name in raw_mapping.items():
+        if not rust_name:
+            continue
+        candidates = grouped.get(c_name)
+        if not candidates:
+            continue
+        for candidate in candidates:
+            key = _compose_c_mapping_key_for_symbol(candidate)
+            if not key:
+                continue
+
+            file_path = (
+                candidate.get("file_path")
+                or candidate.get("file")
+                or candidate.get("source_file")
+                or candidate.get("path")
+            )
+            rel_path = _resolve_relative_c_path(str(file_path)) if isinstance(file_path, str) else None
+            dest_rel = _map_c_path_to_rust_relative(rel_path) if rel_path is not None else None
+            resolved[key] = _compose_rust_mapping_value(rust_name, dest_rel)
+            break
+    return resolved
+
+
 def _candidate_dest_paths_for_c_file(file_path: str) -> List[Path]:
     rel_path = _resolve_relative_c_path(file_path)
     if rel_path is None:
@@ -437,7 +570,8 @@ def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
         f"Cargo.toml 位置：{cargo_toml_display}\n"
         "模块导入提示：库入口文件位于 src/lib.rs，可查看其中的模块声明来确定需要 use 或 pub use 的模块路径，use语句放到文件的开头；但是不要修改src/lib.rs文件\n"
         "若需查找现有符号或实现，可使用 LSP 搜索工具（如提供的 symbol_definitions/symbol_usage 能力）来定位定义与引用；\n"
-        "如需新增第三方依赖，可调用 run_command 执行 cargo add 或其他下载命令。"
+        "如需新增第三方依赖，可调用 run_command 执行 cargo add 或其他下载命令。\n"
+        "注意在改错的过程中不要修改元素的名称和位置。\n"
     )
 
     review_cb = partial(_verify_compile_success, agent=agent, compile_cmd=compile_cmd, dest_paths=dest_paths)
@@ -500,8 +634,8 @@ def _restore_rust_files(snapshots: Dict[Path, Optional[str]]) -> None:
 def _persist_batch_to_rust(
     batch: Dict[str, Any],
     items: List[Dict[str, Any]],
-    mapping_c2r: Dict[str, Optional[str]],
-    full_mapping: Dict[str, Optional[str]],
+    mapping_c2r: Dict[str, "RustMappingValue"],
+    full_mapping: Dict[str, "RustMappingValue"],
 ) -> Set[Path]:
     src_root = _get_rust_src_root()
     if src_root is None:
@@ -509,29 +643,40 @@ def _persist_batch_to_rust(
 
     symbol_files: Dict[str, Set[Path]] = {}
     for sym in batch.get("symbols", []):
-        c_name = sym.get("name") or sym.get("symbol") or sym.get("id")
-        file_path = sym.get("file_path")
-        rel_path = _resolve_relative_c_path(file_path) if file_path else None
-        if not c_name or rel_path is None:
+        key = _compose_c_mapping_key_for_symbol(sym)
+        file_path = (
+            sym.get("file_path")
+            or sym.get("file")
+            or sym.get("source_file")
+            or sym.get("path")
+        )
+        rel_path = _resolve_relative_c_path(str(file_path)) if isinstance(file_path, str) else None
+        if not key or rel_path is None:
             continue
-        symbol_files.setdefault(c_name, set()).add(rel_path)
+        symbol_files.setdefault(key, set()).add(rel_path)
 
     symbol_destinations: Dict[str, Set[Path]] = {}
-    for c_name, rel_paths in symbol_files.items():
+    for key, rel_paths in symbol_files.items():
         dests: Set[Path] = set()
         for rel_path in rel_paths:
             target_rel = _map_c_path_to_rust_relative(rel_path)
             if target_rel is not None:
                 dests.add(target_rel)
         if dests:
-            symbol_destinations[c_name] = dests
+            symbol_destinations[key] = dests
 
     rust_to_destinations: Dict[str, Set[Path]] = {}
-    for c_name, rust_name in (mapping_c2r or {}).items():
-        if not rust_name:
+    for key, mapping_value in (mapping_c2r or {}).items():
+        if not mapping_value:
             continue
-        dests = symbol_destinations.get(c_name)
+        dests = set(symbol_destinations.get(key, set()))
+        desired_rel = _mapping_value_path(mapping_value)
+        if desired_rel:
+            dests.add(Path(desired_rel))
         if not dests:
+            continue
+        rust_name = _mapping_value_name(mapping_value)
+        if not rust_name:
             continue
         rust_to_destinations.setdefault(rust_name, set()).update(dests)
 
@@ -627,7 +772,7 @@ def _persist_batch_to_rust(
     return written_paths
 
 
-def _persist_mapping_c2r(mapping: Dict[str, Optional[str]]) -> None:
+def _persist_mapping_c2r(mapping: Dict[str, RustMappingValue]) -> None:
     try:
         rust_output_dir = load_rust_output_dir()
     except Exception as exc:
@@ -640,7 +785,12 @@ def _persist_mapping_c2r(mapping: Dict[str, Optional[str]]) -> None:
     target_path = rust_output_dir / MAPPING_C2R_FILENAME
 
     try:
-        payload = {"mapping_c2r": mapping}
+        serialized = {
+            key: _mapping_value_to_string(value)
+            for key, value in mapping.items()
+            if isinstance(value, tuple) and value
+        }
+        payload = {"mapping_c2r": serialized}
         target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
         print(f"写入 mapping_c2r 失败: {exc}")
@@ -710,15 +860,15 @@ def get_analyzer() -> Analyzer:
     return _ANALYZER
 
 
-def _mapping_has_resolved_target(mapping: Dict[str, Optional[str]], name: Optional[str]) -> bool:
+def _mapping_has_resolved_target(
+    mapping: Dict[str, "RustMappingValue"],
+    name: Optional[str],
+    file_path: Optional[str] = None,
+) -> bool:
     if not name:
         return False
-    direct = mapping.get(name)
-    if isinstance(direct, str) and direct.strip():
-        return True
-    normalized = _normalize_c_key(name)
-    resolved = mapping.get(normalized)
-    return isinstance(resolved, str) and resolved.strip()
+    value = _find_mapping_value(mapping, name, file_path)
+    return bool(_mapping_value_name(value))
 
 
 def _get_symbol_ref_for_symbol(analyzer: Analyzer, symbol: Dict[str, Any]):
@@ -787,7 +937,7 @@ def _materialize_symbol_from_ref(analyzer: Analyzer, sym_ref) -> Optional[Dict[s
 
 def _expand_symbols_with_missing_dependencies(
     symbols: List[Dict[str, Any]],
-    current_mapping: Dict[str, Optional[str]],
+    current_mapping: Dict[str, "RustMappingValue"],
 ) -> Tuple[List[Dict[str, Any]], int]:
     if not symbols:
         return symbols, 0
@@ -841,7 +991,7 @@ def _expand_symbols_with_missing_dependencies(
                 continue
             visited_keys.add(dep_key)
 
-            if _mapping_has_resolved_target(current_mapping, dep.name):
+            if _mapping_has_resolved_target(current_mapping, dep.name, getattr(dep, "file_path", None)):
                 continue
 
             dep_symbol = _materialize_symbol_from_ref(analyzer, dep)
@@ -860,7 +1010,7 @@ def _expand_symbols_with_missing_dependencies(
 
 def gather_dependency_context(
     symbols: List[Dict[str, Any]],
-    current_mapping: Dict[str, Optional[str]],
+    current_mapping: Dict[str, "RustMappingValue"],
     rust_defs: Dict[str, str],
     depth: int = 1,
 
@@ -921,7 +1071,8 @@ def gather_dependency_context(
                 continue
             seen_dep_keys.add(dep.key())
             c_name = dep.name
-            rust_name = current_mapping.get(c_name)
+            mapping_value = _find_mapping_value(current_mapping, c_name, getattr(dep, "file_path", None))
+            rust_name = _mapping_value_name(mapping_value)
             if not rust_name:
                 continue
             rust_code = rust_defs.get(rust_name)
@@ -1047,14 +1198,19 @@ def _log_chunk_output(
     batch: Dict[str, Any],
     chunk_index: int,
     items: List[Dict[str, Any]],
-    mapping_c2r: Dict[str, Optional[str]],
+    mapping_c2r: Dict[str, "RustMappingValue"],
 ) -> None:
     batch_id = batch.get("batch_id", "?")
     item_names = [item.get("name") for item in items if isinstance(item, dict)]
     names_str = ", ".join(name for name in item_names if isinstance(name, str) and name.strip()) or "无"
     mapping_total = len(mapping_c2r or {})
     print(f"[batch {batch_id} chunk {chunk_index}] items: {names_str}; mappings: {mapping_total}")
-    pretty = json.dumps({"items": items, "mapping_c2r": mapping_c2r}, ensure_ascii=False, indent=2)
+    formatted_mapping = {
+        key: _mapping_value_to_string(value)
+        for key, value in mapping_c2r.items()
+        if value
+    }
+    pretty = json.dumps({"items": items, "mapping_c2r": formatted_mapping}, ensure_ascii=False, indent=2)
     print(pretty)
 
 
@@ -1092,9 +1248,9 @@ def _chunk_symbols_by_chars(symbols: List[Dict[str, Any]], max_chars: int) -> Li
 
 def translate_batch(
     batch: Dict[str, Any],
-    known_mapping: Optional[Dict[str, Optional[str]]] = None,
+    known_mapping: Optional[Dict[str, "RustMappingValue"]] = None,
     known_rust_defs: Optional[Dict[str, str]] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Optional[str]]]:
+) -> Tuple[List[Dict[str, Any]], Dict[str, "RustMappingValue"]]:
     """对一个 batch 内的所有符号进行转译，按字符阈值拆分处理。"""
     symbols = list(batch.get("symbols", []))
     if not symbols:
@@ -1143,12 +1299,13 @@ def translate_batch(
         sub_batch = dict(batch)
         sub_batch["symbols"] = pending_symbols
         dependency_entries, dependency_summary = gather_dependency_context(pending_symbols, base_mapping, base_rust_defs)
-        items, mapping_c2r = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
+        items, mapping_c2r_raw = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
+        mapping_c2r = _build_mapping_for_symbols(pending_symbols, mapping_c2r_raw)
         _log_chunk_output(batch, 1, items, mapping_c2r)
         return items, mapping_c2r
 
     aggregated_items: List[Dict[str, Any]] = []
-    aggregated_mapping: Dict[str, Optional[str]] = {}
+    aggregated_mapping: Dict[str, "RustMappingValue"] = {}
 
     current_mapping = dict(base_mapping)
     current_rust_defs = dict(base_rust_defs)
@@ -1157,14 +1314,14 @@ def translate_batch(
         sub_batch = dict(batch)
         sub_batch["symbols"] = chunk
         dependency_entries, dependency_summary = gather_dependency_context(chunk, current_mapping, current_rust_defs)
-        items, mapping_c2r = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
+        items, mapping_c2r_raw = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
+        mapping_c2r = _build_mapping_for_symbols(chunk, mapping_c2r_raw)
         _log_chunk_output(batch, chunk_index, items, mapping_c2r)
         aggregated_items.extend(items)
         aggregated_mapping.update(mapping_c2r)
 
         # 更新已知映射和 Rust 定义，供后续 chunk 使用
-        for c_name, rust_name in mapping_c2r.items():
-            current_mapping[c_name] = rust_name
+        current_mapping.update(mapping_c2r)
         for item in items:
             rust_name = item.get("name")
             rust_code = item.get("code")
@@ -1344,15 +1501,19 @@ def main():
         print(f"Batch {batch_id}:")
 
         print("// 映射表：C -> Rust")
-        for c_name, rust_name in entry.get("mapping_c2r", {}).items():
-            print(f"// {c_name} -> {rust_name}")
+        for c_name, mapping_value in entry.get("mapping_c2r", {}).items():
+            if not mapping_value:
+                continue
+            print(f"// {c_name} -> {_mapping_value_to_string(mapping_value)}")
 
         for item in entry.get("items", []):
             print(f"// {item['name']}\n{item['code']}\n")
 
     print("// 汇总映射表：C -> Rust")
-    for c_name, rust_name in mapping_c2r.items():
-        print(f"// {c_name} -> {rust_name}")
+    for c_name, mapping_value in mapping_c2r.items():
+        if not mapping_value:
+            continue
+        print(f"// {c_name} -> {_mapping_value_to_string(mapping_value)}")
 
     _persist_mapping_c2r(mapping_c2r)
 
