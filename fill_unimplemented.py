@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import difflib
 import json
@@ -21,9 +22,8 @@ except ImportError:  # Pydantic v1 fallback
 from analyzer.symbol_model import normalize_symbol_type
 from llm.llm import LLM
 from llm.template_parser.template_parser import TemplateParser
-from collections import deque
 from llm.rag import build_csv_mapping_collection, search_knowledge_base
-from analyzer.config import load_rust_output_dir
+from analyzer.config import get_output_dir, load_rust_output_dir
 
 from element_translation import (
     FUNCTION_SYMBOL_TYPES,
@@ -262,6 +262,24 @@ def _record_success_experience(memory: Memory, success_entry: str) -> None:
     if not summary.experience.strip():
         summary.experience = "- 本次修复成功，总结生成信息为空"
     _append_success_record(history_text, summary)
+
+
+def _run_async(coro: Any) -> Any:
+    try:
+        return asyncio.run(coro)
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            return future.result()
+        return loop.run_until_complete(coro)
 
 
 def _ensure_success_experience_knowledge_base() -> bool:
@@ -661,6 +679,53 @@ def _normalize_compile_output_signature(output: str) -> str:
         if not stripped:
             continue
         normalized_lines.append(stripped)
+def _build_candidate_evaluation_prompt(
+    baseline_output: str,
+    candidate_output: str,
+    candidate_payload: Dict[str, Dict[str, Any]],
+    history_context: str,
+    original_payload: Dict[str, Dict[str, Any]],
+    metadata: Dict[str, Dict[str, Any]],
+) -> str:
+    baseline_excerpt = _truncate_text(baseline_output, 8000)
+    candidate_excerpt = _truncate_text(candidate_output, 8000)
+    diff_summary = _generate_candidate_diff_summary(original_payload, candidate_payload, metadata)
+    diff_summary = diff_summary or "无显著变更"
+
+    prompt = textwrap.dedent(
+        f"""
+        你是一名资深的 Rust 构建工程师。现在有两份 `cargo check` 编译错误日志：
+
+        - 基准错误：
+        {baseline_excerpt}
+
+        - 候选错误：
+        {candidate_excerpt}
+
+        候选修复涉及的代码差异：
+        {diff_summary}
+
+        - 历史改错记录：
+        {history_context}
+
+        请判断候选错误是否相较基准错误更接近于通过编译，输出 JSON：{{"score": 浮点数, "reason": "简述判断依据"}}。
+        - `score` 取值范围建议在 [-1, 1]，越大表示越有希望继续沿着此方向迭代。
+        - 若难以判断，返回 0。
+        - 仅输出 JSON，不要添加额外文本。
+
+        - 绝对不允许出现未预期的闭合分隔符，如打破函数的布局的错误，比如 unexpected closing delimiter，这种错误是非常严重的错误，应该给出 -1 的评分。
+        - 依据历史提示识别是否重复犯下相同错误或延续相同思路却没有改进，若是，请降低评分并说明原因。
+        - 若候选修改引入或保留 `unsafe` 代码，请酌情降低评分，并在 reason 中写明依据。
+                - 请参考以下评分细则：
+                    * 核心报错数量显著减少，或错误仅剩告警/轻微问题：score 介于 0.5 至 1 之间；若几乎能通过编译，趋近 1。
+                    * 报错类型有所改善（如从 borrow 错误降级为简单类型不匹配），记 0 至 0.5；如果只是局部优化或信息不足，可给接近 0 的分数。
+                    * 与基准持平（错误完全一致或仅日志顺序不同），记 0并说明原因。
+                    * 新增严重错误或原有错误加重，记负分；出现语法破坏、未预期的闭合分隔符等高危问题，分值应低于 -0.5。
+        """
+    ).strip()
+    return prompt
+
+
     return "\n".join(normalized_lines)
 
 
@@ -915,42 +980,14 @@ def _evaluate_candidate_progress(
     if not baseline_output or not candidate_output:
         return 0.0, ""
 
-    baseline_excerpt = _truncate_text(baseline_output, 8000)
-    candidate_excerpt = _truncate_text(candidate_output, 8000)
-    diff_summary = _generate_candidate_diff_summary(original_payload, candidate_payload, metadata)
-    diff_summary = diff_summary or "无显著变更"
-
-    prompt = textwrap.dedent(
-        f"""
-        你是一名资深的 Rust 构建工程师。现在有两份 `cargo check` 编译错误日志：
-
-        - 基准错误：
-        {baseline_excerpt}
-
-        - 候选错误：
-        {candidate_excerpt}
-
-        候选修复涉及的代码差异：
-        {diff_summary}
-
-        - 历史改错记录：
-        {history_context}
-
-        请判断候选错误是否相较基准错误更接近于通过编译，输出 JSON：{{"score": 浮点数, "reason": "简述判断依据"}}。
-        - `score` 取值范围建议在 [-1, 1]，越大表示越有希望继续沿着此方向迭代。
-        - 若难以判断，返回 0。
-        - 仅输出 JSON，不要添加额外文本。
-
-        - 绝对不允许出现未预期的闭合分隔符，如打破函数的布局的错误，比如 unexpected closing delimiter，这种错误是非常严重的错误，应该给出 -1 的评分。
-        - 依据历史提示识别是否重复犯下相同错误或延续相同思路却没有改进，若是，请降低评分并说明原因。
-        - 若候选修改引入或保留 `unsafe` 代码，请酌情降低评分，并在 reason 中写明依据。
-                - 请参考以下评分细则：
-                    * 核心报错数量显著减少，或错误仅剩告警/轻微问题：score 介于 0.5 至 1 之间；若几乎能通过编译，趋近 1。
-                    * 报错类型有所改善（如从 borrow 错误降级为简单类型不匹配），记 0 至 0.5；如果只是局部优化或信息不足，可给接近 0 的分数。
-                    * 与基准持平（错误完全一致或仅日志顺序不同），记 0并说明原因。
-                    * 新增严重错误或原有错误加重，记负分；出现语法破坏、未预期的闭合分隔符等高危问题，分值应低于 -0.5。
-        """
-    ).strip()
+    prompt = _build_candidate_evaluation_prompt(
+        baseline_output,
+        candidate_output,
+        candidate_payload,
+        history_context,
+        original_payload,
+        metadata,
+    )
 
     parser = TemplateParser(
         "{result:json:CandidateEvaluationModel}",
@@ -964,6 +1001,55 @@ def _evaluate_candidate_progress(
 
     if not isinstance(response, dict) or not response.get("success"):
         return 0.0, ""
+
+    data = response.get("data", {}).get("result")
+    score: float = 0.0
+    reason = ""
+
+    if isinstance(data, CandidateEvaluationModel):
+        score = float(getattr(data, "score", 0.0) or 0.0)
+        reason = str(getattr(data, "reason", "") or "")
+    elif isinstance(data, dict):
+        score = float(data.get("score", 0.0) or 0.0)
+        reason = str(data.get("reason") or data.get("rationale") or "")
+
+    score = max(-1.0, min(1.0, score))
+    return score, reason
+
+
+async def _evaluate_candidate_progress_async(
+    llm: LLM,
+    baseline_output: str,
+    candidate_output: str,
+    candidate_payload: Dict[str, Dict[str, Any]],
+    history_context: str,
+    original_payload: Dict[str, Dict[str, Any]],
+    metadata: Dict[str, Dict[str, Any]],
+) -> Optional[Tuple[float, str]]:
+    if not baseline_output or not candidate_output:
+        return None
+
+    prompt = _build_candidate_evaluation_prompt(
+        baseline_output,
+        candidate_output,
+        candidate_payload,
+        history_context,
+        original_payload,
+        metadata,
+    )
+
+    parser = TemplateParser(
+        "{result:json:CandidateEvaluationModel}",
+        model_map={"CandidateEvaluationModel": CandidateEvaluationModel},
+    )
+
+    try:
+        response = await llm.call_async(prompt, parser=parser, max_retry=2)
+    except Exception:
+        return None
+
+    if not isinstance(response, dict) or not response.get("success"):
+        return None
 
     data = response.get("data", {}).get("result")
     score: float = 0.0
@@ -1923,7 +2009,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         print("提示: 无法构建自动修复所需的上下文。")
         return False
 
-    history_context = TRAJECTORY_MEMORY.get_latest(5)
+    history_context = TRAJECTORY_MEMORY.get_latest(8)
     attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
     block_anchor = ((attempt_no - 1) // _SUCCESS_EXPERIENCE_PERIOD) * _SUCCESS_EXPERIENCE_PERIOD if attempt_no > 0 else 0
 
@@ -2009,19 +2095,33 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
     workspace_snapshot = _snapshot_workspace_state(project_root)
 
     baseline_output = error_output or ""
-    baseline_error_len = len(baseline_output)
     evaluation_cache: Dict[str, Tuple[float, str]] = {}
-    best_index = -1
-    best_payload: Optional[Dict[str, Dict[str, Any]]] = None
-    best_output = ""
-    best_success = False
-    best_score: float = float("-inf")
+    candidate_infos: List[Dict[str, Any]] = []
+    pending_eval_indices: List[int] = []
+    best_candidate: Optional[Dict[str, Any]] = None
+
+    def _consider_candidate(info: Dict[str, Any]) -> None:
+        nonlocal best_candidate
+        score = info.get("score")
+        if score is None:
+            return
+        if best_candidate is None:
+            best_candidate = info
+            return
+        if info.get("success") and not best_candidate.get("success"):
+            best_candidate = info
+            return
+        if info.get("success") and best_candidate.get("success"):
+            if score > best_candidate.get("score", float("-inf")) + 1e-6:
+                best_candidate = info
+            return
+        if not best_candidate.get("success") and score > best_candidate.get("score", float("-inf")) + 1e-6:
+            best_candidate = info
 
     for idx, candidate in enumerate(candidates):
         _restore_workspace_state(project_root, workspace_snapshot)
         _apply_fix_payload(project_root, metadata, payload, candidate)
 
-        # 新增验证步骤：检查目标符号是否仍能被提取
         skip_candidate = False
         for file_rel, symbols in targets.items():
             for symbol in symbols:
@@ -2048,56 +2148,99 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         if output and not compile_ok:
             print(_truncate_text(output, 2000))
 
-        candidate_score = 0.0
         evaluation_reason = ""
+        candidate_info: Dict[str, Any] = {
+            "idx": idx,
+            "payload": candidate,
+            "output": output,
+            "success": compile_ok,
+            "score": 1.0 if compile_ok else 0.0,
+            "reason": "",
+            "cache_key": None,
+        }
+
         if compile_ok:
-            candidate_score = 1.0
             evaluation_reason = "cargo check 已通过"
-        elif baseline_output and output:
+            candidate_info["reason"] = evaluation_reason
+            candidate_infos.append(candidate_info)
+            if evaluation_reason:
+                print(f"候选 {idx + 1} LLM 评估得分 {candidate_info['score']:.2f}：{evaluation_reason}")
+            _consider_candidate(candidate_info)
+            best_candidate = candidate_info
+            break
+
+        candidate_infos.append(candidate_info)
+
+        if baseline_output and output:
             cache_key = f"{candidate_signature}|{_summarize_candidate_changes(candidate)}"
+            candidate_info["cache_key"] = cache_key
             if cache_key in evaluation_cache:
-                candidate_score, evaluation_reason = evaluation_cache[cache_key]
+                score, evaluation_reason = evaluation_cache[cache_key]
+                candidate_info["score"] = score
+                candidate_info["reason"] = evaluation_reason
+                if evaluation_reason:
+                    print(f"候选 {idx + 1} LLM 评估得分 {score:.2f}：{evaluation_reason}")
+                _consider_candidate(candidate_info)
             else:
-                candidate_score, evaluation_reason = _evaluate_candidate_progress(
+                pending_eval_indices.append(len(candidate_infos) - 1)
+        else:
+            _consider_candidate(candidate_info)
+
+    _restore_workspace_state(project_root, workspace_snapshot)
+
+    if pending_eval_indices and (best_candidate is None or not best_candidate.get("success")):
+        async def _async_evaluate() -> List[Any]:
+            tasks = [
+                _evaluate_candidate_progress_async(
                     llm,
                     baseline_output,
-                    output,
-                    candidate,
+                    candidate_infos[i]["output"],
+                    candidate_infos[i]["payload"],
                     history_context,
                     payload,
                     metadata,
                 )
-                evaluation_cache[cache_key] = (candidate_score, evaluation_reason)
+                for i in pending_eval_indices
+            ]
+            if not tasks:
+                return []
+            return await asyncio.gather(*tasks, return_exceptions=True)
 
-        if evaluation_reason:
-            print(f"候选 {idx + 1} LLM 评估得分 {candidate_score:.2f}：{evaluation_reason}")
+        results = _run_async(_async_evaluate())
+        for list_idx, result in enumerate(results or []):
+            info_index = pending_eval_indices[list_idx]
+            info = candidate_infos[info_index]
+            score: float = info.get("score", 0.0)
+            reason = info.get("reason", "")
+            if isinstance(result, Exception) or result is None:
+                score = score
+                reason = reason
+            else:
+                score, reason = result
+            info["score"] = score
+            info["reason"] = reason
+            cache_key = info.get("cache_key")
+            if cache_key:
+                evaluation_cache[cache_key] = (score, reason)
+            if reason:
+                idx = info["idx"]
+                print(f"候选 {idx + 1} LLM 评估得分 {score:.2f}：{reason}")
+            _consider_candidate(info)
 
-        update_best = False
-        if compile_ok and not best_success:
-            update_best = True
-        elif compile_ok and best_success:
-            if candidate_score > best_score + 1e-6:
-                update_best = True
-        elif not best_success:
-            if best_payload is None or candidate_score > best_score + 1e-6:
-                update_best = True
+    if best_candidate is None:
+        for info in candidate_infos:
+            if info.get("score") is not None:
+                if best_candidate is None or info.get("score", float("-inf")) > best_candidate.get("score", float("-inf")) + 1e-6:
+                    best_candidate = info
 
-        if update_best:
-            best_index = idx
-            best_payload = candidate
-            best_output = output
-            best_success = compile_ok
-            best_score = candidate_score
-
-            if best_success:
-                # 一旦发现通过的候选，提前结束后续候选评估以节省时间
-                break
-
-    _restore_workspace_state(project_root, workspace_snapshot)
-
-    if best_payload is None:
+    if best_candidate is None:
         print("提示: 所有候选修复均无效，已恢复原始内容。")
         return False
+
+    best_index = best_candidate["idx"]
+    best_payload = best_candidate["payload"]
+    best_output = best_candidate.get("output", "")
+    best_success = bool(best_candidate.get("success"))
 
     if 0 <= best_index < len(candidate_markers):
         marker = candidate_markers[best_index]
@@ -2388,7 +2531,11 @@ def _has_unimplemented_stub(project_root: Path, rust_name: str, dest_paths: List
 
 
 def _load_batches() -> List[Dict[str, Any]]:
-    with open("analyzer/output/file_batches.json", "r", encoding="utf-8") as fh:
+    file_batches_path = get_output_dir() / "file_batches.json"
+    if not file_batches_path.exists():
+        raise FileNotFoundError(f"缺少批处理输入: {file_batches_path}")
+
+    with file_batches_path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
     return data.get("batches", [])
 

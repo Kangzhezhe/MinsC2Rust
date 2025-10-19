@@ -1,5 +1,6 @@
 llm_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-llm_api_key = 'sk-438a9f4316fe4856a96d2c529de0404f'
+# llm_api_key = 'sk-438a9f4316fe4856a96d2c529de0404f'
+llm_api_key = 'sk-3974848b15124dae92588a77356a149e'
 llm_default_model = 'deepseek-v3'
 # llm_default_model = 'qwen2.5-7b-instruct-1m'
 
@@ -11,7 +12,8 @@ llm_default_model = 'deepseek-v3'
 
 
 embedding_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-embedding_api_key = 'sk-438a9f4316fe4856a96d2c529de0404f'
+# embedding_api_key = 'sk-438a9f4316fe4856a96d2c529de0404f'
+embedding_api_key = 'sk-3974848b15124dae92588a77356a149e'
 embedding_default_model = 'text-embedding-v4'
 embedding_dimensions = 3072
 

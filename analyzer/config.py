@@ -6,10 +6,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Union
 
 import yaml
-
-CONFIG_FILENAME = "analyzer_config.yaml"
-CONFIG_PATH = Path(__file__).resolve().parents[1] / CONFIG_FILENAME
+CONFIG_ENV_VAR = "ANALYZER_CONFIG_PATH"
 _ANALYZER_DIR = Path(__file__).resolve().parent
+_DEFAULT_CONFIG_PATH = (_ANALYZER_DIR.parent / "analyzer_config.yaml").resolve()
 
 
 class AnalyzerConfigError(RuntimeError):
@@ -17,11 +16,28 @@ class AnalyzerConfigError(RuntimeError):
 
 
 @lru_cache(maxsize=1)
+def _get_config_path() -> Path:
+    env_value = os.environ.get(CONFIG_ENV_VAR)
+    if env_value:
+        path = Path(env_value)
+        if not path.is_absolute():
+            path = (Path.cwd() / path).resolve()
+    else:
+        path = _DEFAULT_CONFIG_PATH
+    return path
+
+
+def get_config_path() -> Path:
+    return _get_config_path()
+
+
+@lru_cache(maxsize=1)
 def _load_config_dict() -> Dict[str, Any]:
-    if not CONFIG_PATH.exists():
-        raise AnalyzerConfigError(f"配置文件未找到: {CONFIG_PATH}")
+    config_path = _get_config_path()
+    if not config_path.exists():
+        raise AnalyzerConfigError(f"配置文件未找到: {config_path}")
     try:
-        with CONFIG_PATH.open("r", encoding="utf-8") as fh:
+        with config_path.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
     except yaml.YAMLError as exc:  # type: ignore[attr-defined]
         raise AnalyzerConfigError(f"配置文件解析失败: {exc}") from exc
@@ -32,10 +48,11 @@ def _load_config_dict() -> Dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def load_rust_output_dir() -> Path:
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
+    config_path = _get_config_path()
+    if not config_path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
-    with CONFIG_PATH.open("r", encoding="utf-8") as fh:
+    with config_path.open("r", encoding="utf-8") as fh:
         config_data = yaml.safe_load(fh) or {}
 
     rust_output_value = config_data.get("rust_output")
@@ -44,7 +61,7 @@ def load_rust_output_dir() -> Path:
 
     rust_output_path = Path(rust_output_value)
     if not rust_output_path.is_absolute():
-        rust_output_path = (CONFIG_PATH.parent / rust_output_path).resolve()
+        rust_output_path = (config_path.parent / rust_output_path).resolve()
 
     return rust_output_path
 
@@ -57,7 +74,7 @@ def get_project_root() -> Path:
 
     root_path = Path(root_value)
     if not root_path.is_absolute():
-        root_path = (CONFIG_PATH.parent / root_path).resolve()
+        root_path = (_get_config_path().parent / root_path).resolve()
     return root_path
 
 
@@ -71,7 +88,7 @@ def get_output_dir() -> Path:
         expanded = os.path.expandvars(expanded)
         output_path = Path(expanded)
         if not output_path.is_absolute():
-            output_path = (CONFIG_PATH.parent / output_path).resolve()
+            output_path = (_get_config_path().parent / output_path).resolve()
     else:
         output_path = (_ANALYZER_DIR / "output").resolve()
 
@@ -100,7 +117,7 @@ def to_absolute_path(path_like: Union[str, Path]) -> Path:
     if analyzer_relative.exists():
         return analyzer_relative
 
-    workspace_relative = (CONFIG_PATH.parent / path_obj).resolve()
+    workspace_relative = (_get_config_path().parent / path_obj).resolve()
     if workspace_relative.exists():
         return workspace_relative
 
@@ -119,7 +136,8 @@ def to_relative_path(path_like: Union[str, Path]) -> str:
 
 __all__ = [
     "AnalyzerConfigError",
-    "CONFIG_PATH",
+    "CONFIG_ENV_VAR",
+    "get_config_path",
     "get_project_root",
     "get_output_dir",
     "to_absolute_path",

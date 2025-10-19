@@ -17,7 +17,7 @@ from llm.template_parser.template_parser import TemplateParser
 from llm.llm import LLM
 from llm.rag import build_csv_mapping_collection, search_knowledge_base
 from analyzer.analyzer import Analyzer
-from analyzer.config import get_project_root, load_rust_output_dir
+from analyzer.config import get_output_dir, get_project_root, load_rust_output_dir
 from analyzer.symbol_model import SymbolModel, normalize_symbol_type
 
 
@@ -1219,7 +1219,8 @@ def build_batch_prompt(
         "- 使用纯 Rust 安全惯用特性，不使用 unsafe 代码；\n"
         "- 用 mut 关键字声明可变变量；\n"
         "- 避免使用任何 `c_void`、`*mut`、`*const` 、`Box<dyn Any>`指针，任何ffi操作的类型；泛型用途的万能指针或结构体内部万能指针变量使用Rust的泛型<T>，智能指针，泛型结构体替代，确保内存安全和所有权管理\n"
-        "- 评估并改进数据结构及所有权/借用模型；避免不必要的 clone/Box，可引入 Rc/RefCell/Weak(弱引用防止循环引用，管理父子关系) 等模式；\n"
+        "- 尽量避免使用 Box类型，比如有prev，next或者parent，child这种指针，一定要使用Rc/RefCell/Weak\n"
+        "- 评估并改进数据结构及所有权/借用模型；避免不必要的 Box，可引入 Rc/RefCell/Weak(弱引用防止循环引用，管理父子关系) 等模式；\n"
         "- 如为类型/结构体/函数签名，给出 idiomatic 的 Rust 定义（尽量使用所有权/借用）；\n"
         "- 结构体所有成员使用pub关键字，所有函数，结构体，枚举，全局变量，全局类型定义声明成pub，允许外部访问，生成的所有的rust函数定义前面加pub关键字, 不要出现非pub的函数定义\n"
         "- 所有定义前加 pub；不得出现 impl/trait/class 等封装\n"
@@ -1238,7 +1239,7 @@ def build_batch_prompt(
     "- items: [{name, code, note}]\n"
     "- mapping_c2r: {c_name: rust_name | null}\n"
     "注意：这里items中的name必须与mapping_c2r中的rust_name一致，包括大小写必须与code中元素的名称一致。\n"
-    "允许的处理方式仅限 translate(生成新Rust实现)、map(复用已有实现，映射到已经转换完成的Rust符号) 与 delete(删除无意义符号，比如头文件宏，无意义的宏定义，为null表示删除，注意：有数据的常量不要删除)。\n"
+    "允许的处理方式仅限 translate(生成新Rust实现)、map(复用已有实现，映射到已经转换完成的Rust符号，比如结构体别名，注意：类型不同的变量不能复用) 与 delete(删除无意义符号，比如头文件宏，无意义的宏定义，为null表示删除，注意：有数据的常量不要删除)。\n"
     "note 字段为字符串，简单明确指明上述哪一种处理并给出原因，无额外说明可留空；\n"
         "规则：安全 Rust；不要多余说明；items.name 必须与 mapping_c2r 的 rust 值一致；"
         "输出示例：\n"
@@ -1738,7 +1739,11 @@ def main():
         collection_name=TYPE_MAPPING_COLLECTION,
     )
 
-    with open("analyzer/output/file_batches.json", "r", encoding="utf-8") as f:
+    file_batches_path = get_output_dir() / "file_batches.json"
+    if not file_batches_path.exists():
+        raise FileNotFoundError(f"未找到批处理文件: {file_batches_path}")
+
+    with file_batches_path.open("r", encoding="utf-8") as f:
         batches_payload = json.load(f)
 
     batch_list = batches_payload.get("batches", [])
