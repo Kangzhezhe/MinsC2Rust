@@ -9,7 +9,7 @@ import tempfile
 import textwrap
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -23,7 +23,12 @@ from analyzer.symbol_model import normalize_symbol_type
 from llm.llm import LLM
 from llm.template_parser.template_parser import TemplateParser
 from llm.rag import build_csv_mapping_collection, search_knowledge_base
-from analyzer.config import get_output_dir, load_rust_output_dir
+from analyzer.config import get_output_dir, load_rust_output_dir, get_project_root
+from metrics import (
+    export_compile_metrics,
+    calculate_safety_metrics,
+    calculate_translation_line_ratio,
+)
 
 from element_translation import (
     FUNCTION_SYMBOL_TYPES,
@@ -2384,6 +2389,19 @@ def _collect_dest_paths(symbol: Dict[str, Any]) -> List[Path]:
     return [rust_root / target_rel]
 
 
+def _collect_metrics_file_keys(project_root: Path, dest_paths: List[Path]) -> Set[str]:
+    keys: Set[str] = set()
+    for dest_path in dest_paths:
+        try:
+            rel = dest_path.relative_to(project_root).as_posix()
+        except ValueError:
+            rel = dest_path.as_posix()
+        keys.add(rel)
+    if not keys:
+        keys.add("<unknown>")
+    return keys
+
+
 def _replace_function(dest_path: Path, rust_name: str, new_code: str) -> bool:
     if FUNCTION_STUB_PATTERN not in new_code:
         new_code_text = new_code.strip() + "\n"
@@ -2614,6 +2632,7 @@ def main() -> None:
         if symbol.get("type") != "functions":
             continue
         dest_paths = _collect_dest_paths(symbol)
+        file_keys = _collect_metrics_file_keys(project_root, dest_paths)
         tasks.append(
             {
                 "mapping_key": mapping_key,
@@ -2621,22 +2640,63 @@ def main() -> None:
                 "rust_name": rust_name,
                 "symbol": symbol,
                 "dest_paths": dest_paths,
+                "file_keys": tuple(sorted(file_keys)),
             }
         )
+
+    total_functions = 0
+    successful_functions = 0
+    failed_functions: List[str] = []
+    file_stats: DefaultDict[str, Dict[str, int]] = defaultdict(lambda: {"total": 0, "passed": 0})
 
     for task in tasks:
         c_name = task["c_name"]
         rust_name = task["rust_name"]
         symbol = task["symbol"]
         dest_paths = task["dest_paths"]
+        raw_file_keys = task.get("file_keys")
+        if isinstance(raw_file_keys, (list, tuple)):
+            file_keys: Tuple[str, ...] = tuple(raw_file_keys)
+        else:
+            file_keys = tuple()
+        if not file_keys:
+            file_keys = ("<unknown>",)
 
         existing_paths = [path for path in dest_paths if path.exists()]
         has_stub = _has_unimplemented_stub(project_root, rust_name, existing_paths)
         if existing_paths and not has_stub:
             print(f"跳过 {rust_name}，未检测到 unimplemented!() 存根。")
             translated_rust.add(rust_name)
-        else:
-            success, updated_paths = _generate_and_apply_rust_impl(
+            for file_key in file_keys:
+                file_stats[file_key]  # ensure metrics entry exists without counting
+            continue
+
+        total_functions += 1
+        for file_key in file_keys:
+            stats = file_stats[file_key]
+            stats["total"] += 1
+
+        success, updated_paths = _generate_and_apply_rust_impl(
+            project_root,
+            symbol,
+            rust_name,
+            mapping,
+            rust_defs,
+            translated_rust,
+            dest_paths,
+        )
+        if not success:
+            failed_functions.append(rust_name)
+            continue
+
+        updated_paths_set: Set[Path] = set(updated_paths)
+        if not updated_paths_set and dest_paths:
+            updated_paths_set.update(dest_paths)
+
+        def regenerate_function_body() -> bool:
+            nonlocal updated_paths_set
+            print(f"提示: 重试过程中重新生成 {rust_name} 的 Rust 实现。")
+            regen_success, regen_paths = _generate_and_apply_rust_impl(
                 project_root,
                 symbol,
                 rust_name,
@@ -2645,44 +2705,61 @@ def main() -> None:
                 translated_rust,
                 dest_paths,
             )
-            if not success:
-                continue
+            if not regen_success:
+                return False
+            target_paths = set(regen_paths) if regen_paths else set(dest_paths)
+            if target_paths:
+                updated_paths_set.update(target_paths)
+            return True
 
-            updated_paths_set: Set[Path] = set(updated_paths)
-            if not updated_paths_set and dest_paths:
-                updated_paths_set.update(dest_paths)
+        compile_ok = _compile_after_translation(
+            updated_paths_set,
+            failing_symbol=rust_name,
+            regenerate_callback=regenerate_function_body,
+        )
 
-            def regenerate_function_body() -> bool:
-                nonlocal updated_paths_set
-                print(f"提示: 重试过程中重新生成 {rust_name} 的 Rust 实现。")
-                regen_success, regen_paths = _generate_and_apply_rust_impl(
-                    project_root,
-                    symbol,
-                    rust_name,
-                    mapping,
-                    rust_defs,
-                    translated_rust,
-                    dest_paths,
-                )
-                if not regen_success:
-                    return False
-                target_paths = set(regen_paths) if regen_paths else set(dest_paths)
-                if target_paths:
-                    updated_paths_set.update(target_paths)
-                return True
+        if compile_ok:
+            successful_functions += 1
+            for file_key in file_keys:
+                file_stats[file_key]["passed"] += 1
+        else:
+            failed_functions.append(rust_name)
+            print(f"提示: {rust_name} 的实现未能通过 cargo check。")
 
-            compile_ok = _compile_after_translation(
-                updated_paths_set,
-                failing_symbol=rust_name,
-                regenerate_callback=regenerate_function_body,
-            )
+    print("转译完成。再次运行 cargo check 验证编译结果。")
 
-            if not compile_ok:
-                raise RuntimeError(f"{rust_name} 编译失败，已尝试自动修复。")
+    print("指标已经保存到 metrics/ 目录。")
 
-    print("填充完成。再次运行 cargo check 验证编译结果。")
+    export_compile_metrics(
+        project_root,
+        file_stats,
+        successful_functions,
+        total_functions,
+    )
+
+    safety_input = project_root / "src"
+    safety_output = project_root / "metrics" / "safety_metrics.csv"
+    calculate_safety_metrics(str(safety_input), str(safety_output))
+
+    mapping_path = project_root / "c_to_rust_mapping.json"
+    ratio_output = project_root / "metrics" / "translation_line_ratio.csv"
+    try:
+        c_project_root = get_project_root()
+    except Exception:
+        c_project_root = None
+
+    if mapping_path.exists():
+        calculate_translation_line_ratio(
+            mapping_path,
+            ratio_output,
+            c_root=c_project_root,
+            rust_root=project_root,
+        )
+    else:
+        print(f"提示: 未找到 {mapping_path}，跳过行数比例统计。")
 
     _close_swe_agent_instance()
+
 
 
 if __name__ == "__main__":

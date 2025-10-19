@@ -10,7 +10,9 @@ RUN rustup default stable && \
     cargo install cargo-binutils && \
     rustup component add llvm-tools-preview && \
     rustup component add rust-src && \
-    rustup component add rustfmt
+    rustup component add rustfmt && \
+    rustup component add clippy && \
+    rustup component add rust-analyzer
 
 # 确保 cargo/rustup 在 PATH
 ENV PATH="${CARGO_HOME}/bin:/usr/local/bin:${PATH}"

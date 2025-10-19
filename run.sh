@@ -1,23 +1,36 @@
+#!/usr/bin/env bash
+
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DEFAULT_CONFIG_PATH="$SCRIPT_DIR/analyzer_config.yaml"
+LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/run.log}"
 
-CONFIG_PATH="${1:-$DEFAULT_CONFIG_PATH}"
+rm -f "$LOG_FILE"
+touch "$LOG_FILE"
 
-if ! CONFIG_PATH=$(realpath "$CONFIG_PATH"); then
-	echo "无法解析配置文件路径: ${1:-$DEFAULT_CONFIG_PATH}" >&2
-	exit 1
-fi
+main() {
+	local config_arg="${1:-$DEFAULT_CONFIG_PATH}"
+	local config_path
 
-if [ ! -f "$CONFIG_PATH" ]; then
-	echo "配置文件不存在: $CONFIG_PATH" >&2
-	exit 1
-fi
+	if ! config_path=$(realpath "$config_arg"); then
+		echo "无法解析配置文件路径: ${1:-$DEFAULT_CONFIG_PATH}" >&2
+		return 1
+	fi
 
-export ANALYZER_CONFIG_PATH="$CONFIG_PATH"
+	if [ ! -f "$config_path" ]; then
+		echo "配置文件不存在: $config_path" >&2
+		return 1
+	fi
 
-rust_output_dir=$(python - <<'PYTHON'
+	CONFIG_PATH="$config_path"
+	export ANALYZER_CONFIG_PATH="$CONFIG_PATH"
+
+	echo "日志输出将保存到: $LOG_FILE"
+	echo "使用配置文件: $CONFIG_PATH"
+
+	local rust_output_dir
+	rust_output_dir=$(python - <<'PYTHON'
 import sys
 from analyzer.config import load_rust_output_dir
 
@@ -35,11 +48,21 @@ print(path.as_posix())
 PYTHON
 )
 
-if [ -d "$rust_output_dir" ]; then
-	rm -r "$rust_output_dir"
-fi
-cd analyzer && ./test.sh
-cd ..
-python analyzer/build_rust_skeleton.py
-python element_translation.py
-python fill_unimplemented.py
+	if [ -d "$rust_output_dir" ]; then
+		echo "删除已有输出目录: $rust_output_dir"
+		rm -r "$rust_output_dir"
+	fi
+
+	(
+		cd analyzer
+		echo "运行 analyzer/test.sh"
+		./test.sh
+	)
+
+	python analyzer/build_rust_skeleton.py
+	python element_translation.py
+	python fill_unimplemented.py
+}
+
+main "$@" 2>&1 | tee -a "$LOG_FILE"
+exit "${PIPESTATUS[0]}"
