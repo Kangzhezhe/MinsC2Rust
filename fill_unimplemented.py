@@ -897,13 +897,16 @@ def _evaluate_candidate_progress(
     candidate_output: str,
     candidate_payload: Dict[str, Dict[str, Any]],
     history_context: str,
+    original_payload: Dict[str, Dict[str, Any]],
+    metadata: Dict[str, Dict[str, Any]],
 ) -> Tuple[float, str]:
     if not baseline_output or not candidate_output:
         return 0.0, ""
 
-    baseline_excerpt = _truncate_text(baseline_output, 4000)
-    candidate_excerpt = _truncate_text(candidate_output, 4000)
-    change_summary = _summarize_candidate_changes(candidate_payload)
+    baseline_excerpt = _truncate_text(baseline_output, 8000)
+    candidate_excerpt = _truncate_text(candidate_output, 8000)
+    diff_summary = _generate_candidate_diff_summary(original_payload, candidate_payload, metadata)
+    diff_summary = diff_summary or "无显著变更"
 
     prompt = textwrap.dedent(
         f"""
@@ -915,7 +918,8 @@ def _evaluate_candidate_progress(
         - 候选错误：
         {candidate_excerpt}
 
-        候选修复涉及的改动概览：{change_summary}
+        候选修复涉及的代码差异：
+        {diff_summary}
 
         - 历史改错记录：
         {history_context}
@@ -926,6 +930,8 @@ def _evaluate_candidate_progress(
         - 仅输出 JSON，不要添加额外文本。
 
         - 绝对不允许出现未预期的闭合分隔符，如打破函数的布局的错误，比如 unexpected closing delimiter，这种错误是非常严重的错误，应该给出 -1 的评分。
+        - 依据历史提示识别是否重复犯下相同错误或延续相同思路却没有改进，若是，请降低评分并说明原因。
+        - 若候选修改引入或保留 `unsafe` 代码，请酌情降低评分，并在 reason 中写明依据。
                 - 请参考以下评分细则：
                     * 核心报错数量显著减少，或错误仅剩告警/轻微问题：score 介于 0.5 至 1 之间；若几乎能通过编译，趋近 1。
                     * 报错类型有所改善（如从 borrow 错误降级为简单类型不匹配），记 0 至 0.5；如果只是局部优化或信息不足，可给接近 0 的分数。
@@ -2033,7 +2039,9 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
                     baseline_output,
                     output,
                     candidate,
-                    history_context
+                    history_context,
+                    payload,
+                    metadata,
                 )
                 evaluation_cache[cache_key] = (candidate_score, evaluation_reason)
 
