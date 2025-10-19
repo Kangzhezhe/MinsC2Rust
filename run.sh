@@ -1,6 +1,8 @@
 set -euo pipefail
 
-rm -r output
+if [ -d output ]; then
+	rm -r output
+fi
 cd analyzer && ./test.sh
 cd ..
 python analyzer/build_rust_skeleton.py

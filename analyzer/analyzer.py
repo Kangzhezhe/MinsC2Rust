@@ -43,10 +43,6 @@ except ImportError:  # pragma: no cover
 _SYMBOL_ANALYZER = None
 
 
-def _normalize_path(value: str) -> str:
-    return value.replace("\\", "/").lstrip("./")
-
-
 @dataclass(frozen=True)
 class SymbolRef:
     name: str
@@ -254,43 +250,11 @@ class Analyzer:
         if symbol_type:
             cands = [s for s in cands if s.type == symbol_type]
         if file_path:
-            normalized_hint = _normalize_path(file_path)
-            cands = [
-                s for s in cands
-                if s.file_path == file_path or _normalize_path(s.file_path) == normalized_hint
-            ]
+            cands = [s for s in cands if s.file_path == file_path]
         return cands
 
     def get_symbol_by_key(self, key: str) -> Optional[SymbolRef]:
         return self._by_key.get(key)
-
-    def resolve_symbol_key(self, composite_key: str) -> Optional[SymbolRef]:
-        if not composite_key:
-            return None
-        if composite_key in self._by_key:
-            return self._by_key[composite_key]
-
-        splitter = "|" if "|" in composite_key else ":"
-        parts = composite_key.split(splitter)
-        if not parts:
-            return None
-
-        name = parts[0]
-        type_hint = parts[1] if len(parts) > 1 else None
-        file_hint = parts[2] if len(parts) > 2 else None
-
-        sym_type = normalize_symbol_type(type_hint) if type_hint else None
-
-        candidates: List[SymbolRef] = []
-        if file_hint:
-            candidates = self.find_symbols_by_name(name, sym_type, file_hint)
-            if not candidates:
-                normalized_file = _normalize_path(file_hint)
-                candidates = self.find_symbols_by_name(name, sym_type, normalized_file)
-        if not candidates:
-            candidates = self.find_symbols_by_name(name, sym_type)
-
-        return candidates[0] if candidates else None
 
     def get_definition_location(
         self,

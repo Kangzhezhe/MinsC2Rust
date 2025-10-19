@@ -7,6 +7,7 @@ import shlex
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 import subprocess
+import tempfile
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, StateGraph  # type: ignore
@@ -23,7 +24,7 @@ from analyzer.symbol_model import SymbolModel, normalize_symbol_type
 class RustItem(BaseModel):
     """单个 Rust 元素（name + 完整源码 + 备注）。"""
 
-    name: str = Field(..., description="Rust 元素名（类型/结构体/函数/常量等）")
+    name: str = Field(..., description="Rust 元素名（类型/结构体/函数/常量等），一定要与 code 中的元素名称保持一致。")
     code: str = Field(..., description="该元素的完整 Rust 源码")
     note: Optional[str] = Field(..., description="一句话描述该元素对应的转换/映射/删除说明，比如：为什么要转换/映射/删除。")
 
@@ -68,6 +69,7 @@ TYPE_MAPPING_TOP_K = 6
 TYPE_MAPPING_RERANK_TOP_N = 3
 MAX_CHARS_PER_TRANSLATION = 3000
 COMPILE_MAX_RETRIES = 3
+TRANSLATION_CHUNK_MAX_RETRIES = 20
 AUTO_DEPENDENCY_EXPANSION_LIMIT = 64
 
 FUNCTION_SYMBOL_TYPES: Set[str] = {"functions"}
@@ -193,6 +195,7 @@ _DEST_COMPLETED_SOURCES: DefaultDict[Path, Set[str]] = defaultdict(set)
 _DEST_FLUSHED_DESTS: Set[Path] = set()
 _SWE_AGENT_INSTANCE: Optional["SWEAgent"] = None
 _RUST_FILE_CACHE: Dict[Path, str] = {}
+RUST_AST_PROJECT_DIR = Path(__file__).resolve().parent / "rust_ast_project"
 
 MAPPING_C2R_FILENAME = "mapping_c2r.json"
 
@@ -481,6 +484,37 @@ def _load_rust_code_for_dependency(dep, rust_name: str, rust_defs: Dict[str, str
     return None
 
 
+def _run_rust_symbol_extractor(project_root: Path, symbol: str) -> List[Dict[str, Any]]:
+    """Invoke the Rust AST extractor to confirm a symbol exists on disk."""
+    if not RUST_AST_PROJECT_DIR.exists():
+        raise RuntimeError(f"Rust AST 项目不存在: {RUST_AST_PROJECT_DIR}")
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        cmd = [
+            "cargo",
+            "run",
+            "--quiet",
+            "--",
+            str(project_root),
+            symbol,
+            str(tmp_path),
+        ]
+        subprocess.run(cmd, cwd=RUST_AST_PROJECT_DIR, check=True)
+        with tmp_path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"提取 Rust 符号 {symbol} 失败: {exc}") from exc
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    matches = payload.get("matches", []) if isinstance(payload, dict) else []
+    return matches
+
+
 def _get_expected_sources_for_dest(dest_path: Path, target_rel: Path) -> Set[str]:
     expected = _DEST_EXPECTED_SOURCES.get(dest_path)
     if expected is not None:
@@ -516,6 +550,28 @@ def _verify_compile_success(context, agent: "SWEAgent", compile_cmd: str, dest_p
         return False, f"复验命令异常: {exc}"
 
     if (rerun or {}).get("returncode", 0) == 0:
+        mapping_c2r = _load_persisted_mapping_c2r()
+        if mapping_c2r:
+            try:
+                project_root = load_rust_output_dir()
+            except Exception as exc:
+                return False, f"符号验证失败：无法定位 Rust 输出目录：{exc}"
+
+            if not project_root:
+                return False, "符号验证失败：未配置 Rust 输出目录。"
+
+            is_valid, message, is_fatal = _validate_rust_symbols(
+                mapping_c2r,
+                generated_symbols=set(),
+                known_generated_symbols=set(),
+                project_root=project_root,
+            )
+            if not is_valid:
+                failure_reason = message or "符号验证失败：未找到映射中的 Rust 符号。请不要删除原有的元素或更改名称。"
+                if is_fatal:
+                    return False, failure_reason
+                return False, failure_reason
+
         rel_list = _format_relative_paths(dest_paths)
         return True, "编译通过"
     return False, "复验失败，错误信息：" + (rerun.get("stderr", "").strip() or rerun.get("stdout", "").strip() or "无错误输出")
@@ -569,9 +625,11 @@ def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
         f"编译命令使用run_command工具：{compile_cmd}\n"
         f"Cargo.toml 位置：{cargo_toml_display}\n"
         "模块导入提示：库入口文件位于 src/lib.rs，可查看其中的模块声明来确定需要 use 或 pub use 的模块路径，use语句放到文件的开头；但是不要修改src/lib.rs文件\n"
+        "若编译报错缺少导入语句，请先参考尝试编译器的所有建议，也可按文件路径推导模块层级：去掉 `src/` 前缀与 `.rs` 后缀，将路径段依次映射为 `crate` 下的模块，如 `src/foo.rs -> crate::foo`、`src/module/sub.rs -> crate::module_sub`，示例：`use crate::src_module_b_shared::module_b_value;`。\n"
         "若需查找现有符号或实现，可使用 LSP 搜索工具（如提供的 symbol_definitions/symbol_usage 能力）来定位定义与引用；\n"
         "如需新增第三方依赖，可调用 run_command 执行 cargo add 或其他下载命令。\n"
         "注意在改错的过程中不要修改元素的名称和位置。\n"
+        "注意：千万不要删除原有的元素，或者改名，否则可能导致功能缺失！\n"
     )
 
     review_cb = partial(_verify_compile_success, agent=agent, compile_cmd=compile_cmd, dest_paths=dest_paths)
@@ -794,6 +852,39 @@ def _persist_mapping_c2r(mapping: Dict[str, RustMappingValue]) -> None:
         target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as exc:
         print(f"写入 mapping_c2r 失败: {exc}")
+
+
+def _load_persisted_mapping_c2r() -> Dict[str, RustMappingValue]:
+    try:
+        rust_output_dir = load_rust_output_dir()
+    except Exception as exc:
+        print(f"无法定位 Rust 输出目录，跳过映射加载：{exc}")
+        return {}
+
+    if rust_output_dir is None:
+        return {}
+
+    target_path = rust_output_dir / MAPPING_C2R_FILENAME
+    if not target_path.exists():
+        return {}
+
+    try:
+        with target_path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except Exception as exc:
+        print(f"读取 mapping_c2r 失败: {exc}")
+        return {}
+
+    raw_mapping = payload.get("mapping_c2r")
+    if not isinstance(raw_mapping, dict):
+        return {}
+
+    resolved: Dict[str, RustMappingValue] = {}
+    for key, raw_value in raw_mapping.items():
+        parsed = _parse_rust_mapping_string(raw_value)
+        if parsed:
+            resolved[key] = parsed
+    return resolved
 
 
 def _parse_mapping_doc(doc: str) -> Optional[Tuple[Dict[str, str], Dict[str, str]]]:
@@ -1145,12 +1236,41 @@ def build_batch_prompt(
         "- 如果 C 宏可以直接使用标准库中的既有宏或函数，请优先复用（例如 assert 对应 Rust 的 assert! 宏）；\n"
     "输出对象必须包含键：items, mapping_c2r。\n"
     "- items: [{name, code, note}]\n"
-        "- mapping_c2r: {c_name: rust_name | null}\n"
+    "- mapping_c2r: {c_name: rust_name | null}\n"
+    "注意：这里items中的name必须与mapping_c2r中的rust_name一致，包括大小写必须与code中元素的名称一致。\n"
     "允许的处理方式仅限 translate(生成新Rust实现)、map(复用已有实现，映射到已经转换完成的Rust符号) 与 delete(删除无意义符号，比如头文件宏，无意义的宏定义，为null表示删除，注意：有数据的常量不要删除)。\n"
     "note 字段为字符串，简单明确指明上述哪一种处理并给出原因，无额外说明可留空；\n"
-    "规则：安全 Rust；不要多余说明；items.name 必须与 mapping_c2r 的值一致；"
-        f"输入 items（idx/c_name/content）：\n{c_inputs}"
+        "规则：安全 Rust；不要多余说明；items.name 必须与 mapping_c2r 的 rust 值一致；"
+        "输出示例：\n"
+        "{\n"
+        '  "items": [\n'
+        '    {\n'
+        '      "name": "HASH_TABLE_PRIMES",\n'
+        '      "code": "pub const HASH_TABLE_PRIMES: [u32; 24] = [/* ... */];",\n'
+        '      "note": "translate: 将 C 常量数组转换为 Rust 常量数组"\n'
+        "    },\n"
+        '    {\n'
+        '      "name": "hash_table_new",\n'
+        '      "code": "pub fn hash_table_new() -> HashTable {\\n    unimplemented!()\\n}",\n'
+        '      "note": "translate: 生成 Rust 函数占位实现"\n'
+        "    }\n"
+        "  ],\n"
+        '  "mapping_c2r": {\n'
+        '    "hash_table_primes": "HASH_TABLE_PRIMES",\n'
+        '    "hash_table_new": "hash_table_new"\n'
+        "  }\n"
+        "}\n"
     )
+
+    validation_notes = [
+        note for note in batch.get("validation_notes", [])
+        if isinstance(note, str) and note.strip()
+    ]
+    if validation_notes:
+        formatted_notes = "\n".join(f"- {note}" for note in validation_notes)
+        instr += "\n请特别注意以下符号名称保持一致：\n" + formatted_notes + "\n"
+
+    instr += f"输入 items（idx/c_name/content）：\n{c_inputs}\n\n\n"
 
     if mapping_entries:
         mapping_text = "\n\n".join(mapping_entries)
@@ -1212,6 +1332,144 @@ def _log_chunk_output(
     }
     pretty = json.dumps({"items": items, "mapping_c2r": formatted_mapping}, ensure_ascii=False, indent=2)
     print(pretty)
+
+
+def _validate_rust_symbols(
+    mapping_c2r: Dict[str, "RustMappingValue"],
+    generated_symbols: Set[str],
+    known_generated_symbols: Set[str],
+    project_root: Optional[Path] = None,
+    failed_symbols: Optional[Set[str]] = None,
+) -> Tuple[bool, Optional[str], bool]:
+    """Check that all mapping targets either exist on disk or are newly generated.
+
+    Returns (is_valid, message, is_fatal)."""
+
+    if not mapping_c2r:
+        return True, None, False
+
+    generated_symbols = {name for name in generated_symbols if isinstance(name, str) and name}
+    known_generated_symbols = {name for name in known_generated_symbols if isinstance(name, str) and name}
+
+    if project_root is None:
+        try:
+            project_root = load_rust_output_dir()
+        except Exception as exc:
+            return False, f"符号验证失败：无法定位 Rust 输出目录：{exc}", True
+
+    if not project_root:
+        return False, "符号验证失败：未配置 Rust 输出目录。", True
+
+    pending_symbol_names: Set[str] = set()
+    for dest_path, symbol_map in _DEST_FILE_SYMBOLS.items():
+        if dest_path in _DEST_FLUSHED_DESTS:
+            continue
+        pending_symbol_names.update(symbol_map.keys())
+
+    known_symbols = set(generated_symbols)
+    known_symbols.update(known_generated_symbols)
+
+    visited: Set[str] = set()
+    missing_symbols: List[str] = []
+
+    for value in mapping_c2r.values():
+        rust_name = _mapping_value_name(value)
+        if not rust_name:
+            continue
+        if rust_name in visited:
+            continue
+        visited.add(rust_name)
+        if rust_name in pending_symbol_names:
+            continue
+        if rust_name in known_symbols:
+            continue
+        try:
+            matches = _run_rust_symbol_extractor(project_root, rust_name)
+        except Exception as exc:
+            if failed_symbols is not None:
+                failed_symbols.add(rust_name)
+            return False, f"符号验证异常：{rust_name}: {exc}", True
+        if not matches:
+            missing_symbols.append(rust_name)
+            if failed_symbols is not None:
+                failed_symbols.add(rust_name)
+
+    if missing_symbols:
+        return False, f"符号验证失败：未找到已有 Rust 符号 {', '.join(missing_symbols)}。", False
+
+    return True, None, False
+
+
+def _translate_chunk_with_validation(
+    batch: Dict[str, Any],
+    chunk_symbols: List[Dict[str, Any]],
+    dependency_entries: Optional[List[str]],
+    dependency_summary: Optional[str],
+    known_generated_symbols: Set[str],
+    chunk_index: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, "RustMappingValue"]]:
+    """Translate a chunk and ensure mapping targets are resolvable."""
+
+    sub_batch = dict(batch)
+    sub_batch["symbols"] = chunk_symbols
+    validation_notes: List[str] = [
+        note.strip()
+        for note in sub_batch.get("validation_notes", [])
+        if isinstance(note, str) and note.strip()
+    ]
+    sub_batch["validation_notes"] = validation_notes
+
+    known_symbols_snapshot = {name for name in known_generated_symbols if isinstance(name, str) and name}
+
+    for attempt in range(1, TRANSLATION_CHUNK_MAX_RETRIES + 1):
+        items, mapping_c2r_raw = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
+        mapping_c2r = _build_mapping_for_symbols(chunk_symbols, mapping_c2r_raw)
+
+        generated_symbols = {
+            item.get("name")
+            for item in items
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("name"), str)
+                and isinstance(item.get("code"), str)
+                and item.get("code", "").strip()
+            )
+        }
+
+        failed_symbols: Set[str] = set()
+        is_valid, message, is_fatal = _validate_rust_symbols(
+            mapping_c2r,
+            generated_symbols,
+            known_symbols_snapshot,
+            failed_symbols=failed_symbols,
+        )
+        if is_valid:
+            _log_chunk_output(batch, chunk_index, items, mapping_c2r)
+            return items, mapping_c2r
+
+        if is_fatal:
+            raise RuntimeError(message or "符号验证过程中出现致命错误。")
+
+        if message:
+            print(message)
+        if failed_symbols:
+            hint = "请确保以下 Rust 符号名称与 mapping_c2r 的取值，与 Rust code 元素名完全一致，特别注意大小写，并在生成的代码中保持该名称： " + ", ".join(sorted(failed_symbols))
+            if hint not in validation_notes:
+                validation_notes.append(hint)
+            sub_batch["validation_notes"] = validation_notes
+        if attempt < TRANSLATION_CHUNK_MAX_RETRIES:
+            next_attempt = attempt + 1
+            print(
+                f"[batch {batch.get('batch_id', '?')} chunk {chunk_index}] 符号验证未通过，准备第 {next_attempt}/{TRANSLATION_CHUNK_MAX_RETRIES} 次重新生成。"
+            )
+        else:
+            print(
+                f"[batch {batch.get('batch_id', '?')} chunk {chunk_index}] 符号验证仍未通过，已达到最大重试次数。"
+            )
+
+    raise RuntimeError(
+        f"[batch {batch.get('batch_id', '?')} chunk {chunk_index}] 在 {TRANSLATION_CHUNK_MAX_RETRIES} 次尝试后仍未通过符号验证。"
+    )
 
 
 def _chunk_symbols_by_chars(symbols: List[Dict[str, Any]], max_chars: int) -> List[List[Dict[str, Any]]]:
@@ -1296,12 +1554,15 @@ def translate_batch(
 
     chunks = _chunk_symbols_by_chars(pending_symbols, MAX_CHARS_PER_TRANSLATION)
     if len(chunks) <= 1:
-        sub_batch = dict(batch)
-        sub_batch["symbols"] = pending_symbols
         dependency_entries, dependency_summary = gather_dependency_context(pending_symbols, base_mapping, base_rust_defs)
-        items, mapping_c2r_raw = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
-        mapping_c2r = _build_mapping_for_symbols(pending_symbols, mapping_c2r_raw)
-        _log_chunk_output(batch, 1, items, mapping_c2r)
+        items, mapping_c2r = _translate_chunk_with_validation(
+            batch,
+            pending_symbols,
+            dependency_entries,
+            dependency_summary,
+            set(base_rust_defs.keys()),
+            chunk_index=1,
+        )
         return items, mapping_c2r
 
     aggregated_items: List[Dict[str, Any]] = []
@@ -1311,12 +1572,15 @@ def translate_batch(
     current_rust_defs = dict(base_rust_defs)
 
     for chunk_index, chunk in enumerate(chunks, start=1):
-        sub_batch = dict(batch)
-        sub_batch["symbols"] = chunk
         dependency_entries, dependency_summary = gather_dependency_context(chunk, current_mapping, current_rust_defs)
-        items, mapping_c2r_raw = _translate_symbols(sub_batch, dependency_entries, dependency_summary)
-        mapping_c2r = _build_mapping_for_symbols(chunk, mapping_c2r_raw)
-        _log_chunk_output(batch, chunk_index, items, mapping_c2r)
+        items, mapping_c2r = _translate_chunk_with_validation(
+            batch,
+            chunk,
+            dependency_entries,
+            dependency_summary,
+            set(current_rust_defs.keys()),
+            chunk_index=chunk_index,
+        )
         aggregated_items.extend(items)
         aggregated_mapping.update(mapping_c2r)
 
@@ -1385,6 +1649,7 @@ def _translation_node(state: BatchState) -> BatchState:
 
         compile_success = False
         written_paths = _persist_batch_to_rust(working_batch, items, mapping_c2r, aggregated_mapping)
+        _persist_mapping_c2r(aggregated_mapping)
         for attempt_index in range(COMPILE_MAX_RETRIES):
             attempt_snapshots = _snapshot_rust_files(written_paths)
             compile_success = _run_swe_agent_compile(written_paths)
@@ -1418,7 +1683,6 @@ def _translation_node(state: BatchState) -> BatchState:
         }
         translated_symbols.update(processed_keys)
 
-        _persist_mapping_c2r(aggregated_mapping)
 
         return {
             "remaining_batches": rest,
