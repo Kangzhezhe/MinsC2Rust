@@ -58,7 +58,7 @@ RUN apt-get update -y && \
         apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/bin:$PATH"
-COPY MinsC2Rust/requirements.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 RUN python -m pip config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
     python -m pip config set global.trusted-host mirrors.aliyun.com
 RUN python -m pip install --no-cache-dir pip==25.2 setuptools wheel && \
