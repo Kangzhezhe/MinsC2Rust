@@ -4,6 +4,7 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -1933,25 +1934,47 @@ def _apply_fix_payload(
         except OSError as exc:
             print(f"提示: 写入 {file_rel} 失败，原因: {exc}")
 
-def _snapshot_workspace_state(project_root: Path) -> Dict[str, bytes]:
-    snapshots: Dict[str, bytes] = {}
+def _snapshot_workspace_state(project_root: Path) -> Path:
+    """Persist the workspace snapshot in a temp directory to avoid in-memory copies."""
+    snapshot_root = Path(tempfile.mkdtemp(prefix="workspace_snapshot_"))
+
     for path in project_root.rglob("*"):
         if not path.is_file():
             continue
         try:
-            rel_path = path.relative_to(project_root).as_posix()
+            rel_path = path.relative_to(project_root)
         except ValueError:
             continue
-        if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts):
+        if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in rel_path.parts):
             continue
+
+        dest_path = snapshot_root / rel_path.as_posix()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            snapshots[rel_path] = path.read_bytes()
+            shutil.copy2(path, dest_path)
         except OSError:
-            snapshots[rel_path] = b""
-    return snapshots
+            try:
+                dest_path.write_bytes(b"")
+            except OSError:
+                pass
+
+    return snapshot_root
 
 
-def _restore_workspace_state(project_root: Path, snapshots: Dict[str, bytes]) -> None:
+def _restore_workspace_state(project_root: Path, snapshot_root: Path) -> None:
+    if snapshot_root is None or not snapshot_root.exists():
+        return
+
+    try:
+        snapshot_files = {
+            rel_path
+            for path in snapshot_root.rglob("*")
+            if path.is_file()
+            for rel_path in [path.relative_to(snapshot_root).as_posix()]
+        }
+    except OSError:
+        snapshot_files = set()
+
     try:
         current_files = {
             rel_path
@@ -1963,7 +1986,7 @@ def _restore_workspace_state(project_root: Path, snapshots: Dict[str, bytes]) ->
     except OSError:
         current_files = set()
 
-    for rel_path in current_files - snapshots.keys():
+    for rel_path in current_files - snapshot_files:
         if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts):
             continue
         target = project_root / rel_path
@@ -1972,15 +1995,28 @@ def _restore_workspace_state(project_root: Path, snapshots: Dict[str, bytes]) ->
         except OSError:
             pass
 
-    for rel_path, content in snapshots.items():
+    for rel_path in snapshot_files:
         if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts):
             continue
+        source = snapshot_root / rel_path
         target = project_root / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            target.write_bytes(content)
+            shutil.copy2(source, target)
         except OSError:
-            pass
+            try:
+                target.write_bytes(source.read_bytes())
+            except OSError:
+                pass
+
+
+def _cleanup_workspace_snapshot(snapshot_root: Optional[Path]) -> None:
+    if snapshot_root is None:
+        return
+    try:
+        shutil.rmtree(snapshot_root, ignore_errors=True)
+    except OSError:
+        pass
 
 
 def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
@@ -2097,188 +2133,191 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
     candidates = filtered_candidates
     print(f"LLM 提供了 {len(candidates)} 个修复候选。")
 
-    workspace_snapshot = _snapshot_workspace_state(project_root)
+    workspace_snapshot_dir = _snapshot_workspace_state(project_root)
 
-    baseline_output = error_output or ""
-    evaluation_cache: Dict[str, Tuple[float, str]] = {}
-    candidate_infos: List[Dict[str, Any]] = []
-    pending_eval_indices: List[int] = []
-    best_candidate: Optional[Dict[str, Any]] = None
+    try:
+        baseline_output = error_output or ""
+        evaluation_cache: Dict[str, Tuple[float, str]] = {}
+        candidate_infos: List[Dict[str, Any]] = []
+        pending_eval_indices: List[int] = []
+        best_candidate: Optional[Dict[str, Any]] = None
 
-    def _consider_candidate(info: Dict[str, Any]) -> None:
-        nonlocal best_candidate
-        score = info.get("score")
-        if score is None:
-            return
-        if best_candidate is None:
-            best_candidate = info
-            return
-        if info.get("success") and not best_candidate.get("success"):
-            best_candidate = info
-            return
-        if info.get("success") and best_candidate.get("success"):
-            if score > best_candidate.get("score", float("-inf")) + 1e-6:
+        def _consider_candidate(info: Dict[str, Any]) -> None:
+            nonlocal best_candidate
+            score = info.get("score")
+            if score is None:
+                return
+            if best_candidate is None:
                 best_candidate = info
-            return
-        if not best_candidate.get("success") and score > best_candidate.get("score", float("-inf")) + 1e-6:
-            best_candidate = info
+                return
+            if info.get("success") and not best_candidate.get("success"):
+                best_candidate = info
+                return
+            if info.get("success") and best_candidate.get("success"):
+                if score > best_candidate.get("score", float("-inf")) + 1e-6:
+                    best_candidate = info
+                return
+            if not best_candidate.get("success") and score > best_candidate.get("score", float("-inf")) + 1e-6:
+                best_candidate = info
 
-    for idx, candidate in enumerate(candidates):
-        _restore_workspace_state(project_root, workspace_snapshot)
-        _apply_fix_payload(project_root, metadata, payload, candidate)
+        for idx, candidate in enumerate(candidates):
+            _restore_workspace_state(project_root, workspace_snapshot_dir)
+            _apply_fix_payload(project_root, metadata, payload, candidate)
 
-        skip_candidate = False
-        for file_rel, symbols in targets.items():
-            for symbol in symbols:
-                try:
-                    matches = _run_rust_symbol_extractor(project_root, symbol)
-                    if not matches:
-                        print(f"候选 {idx + 1} 跳过：符号 {symbol} 提取失败。")
+            skip_candidate = False
+            for file_rel, symbols in targets.items():
+                for symbol in symbols:
+                    try:
+                        matches = _run_rust_symbol_extractor(project_root, symbol)
+                        if not matches:
+                            print(f"候选 {idx + 1} 跳过：符号 {symbol} 提取失败。")
+                            skip_candidate = True
+                            break
+                    except Exception as e:
+                        print(f"候选 {idx + 1} 跳过：符号 {symbol} 提取异常：{e}")
                         skip_candidate = True
                         break
-                except Exception as e:
-                    print(f"候选 {idx + 1} 跳过：符号 {symbol} 提取异常：{e}")
-                    skip_candidate = True
+                if skip_candidate:
                     break
             if skip_candidate:
-                break
-        if skip_candidate:
-            continue
+                continue
 
-        compile_ok, output = _run_cargo_check_once()
-        error_len = 0 if compile_ok else len(output)
-        candidate_signature = _normalize_compile_output_signature(output)
-        status = "通过" if compile_ok else "失败"
-        print(f"候选 {idx + 1}/{len(candidates)} cargo check {status}，错误长度 {error_len}。")
-        if output and not compile_ok:
-            print(_truncate_text(output, 2000))
+            compile_ok, output = _run_cargo_check_once()
+            error_len = 0 if compile_ok else len(output)
+            candidate_signature = _normalize_compile_output_signature(output)
+            status = "通过" if compile_ok else "失败"
+            print(f"候选 {idx + 1}/{len(candidates)} cargo check {status}，错误长度 {error_len}。")
+            if output and not compile_ok:
+                print(_truncate_text(output, 2000))
 
-        evaluation_reason = ""
-        candidate_info: Dict[str, Any] = {
-            "idx": idx,
-            "payload": candidate,
-            "output": output,
-            "success": compile_ok,
-            "score": 1.0 if compile_ok else 0.0,
-            "reason": "",
-            "cache_key": None,
-        }
+            evaluation_reason = ""
+            candidate_info: Dict[str, Any] = {
+                "idx": idx,
+                "payload": candidate,
+                "output": output,
+                "success": compile_ok,
+                "score": 1.0 if compile_ok else 0.0,
+                "reason": "",
+                "cache_key": None,
+            }
 
-        if compile_ok:
-            evaluation_reason = "cargo check 已通过"
-            candidate_info["reason"] = evaluation_reason
-            candidate_infos.append(candidate_info)
-            if evaluation_reason:
-                print(f"候选 {idx + 1} LLM 评估得分 {candidate_info['score']:.2f}：{evaluation_reason}")
-            _consider_candidate(candidate_info)
-            best_candidate = candidate_info
-            break
-
-        candidate_infos.append(candidate_info)
-
-        if baseline_output and output:
-            cache_key = f"{candidate_signature}|{_summarize_candidate_changes(candidate)}"
-            candidate_info["cache_key"] = cache_key
-            if cache_key in evaluation_cache:
-                score, evaluation_reason = evaluation_cache[cache_key]
-                candidate_info["score"] = score
+            if compile_ok:
+                evaluation_reason = "cargo check 已通过"
                 candidate_info["reason"] = evaluation_reason
+                candidate_infos.append(candidate_info)
                 if evaluation_reason:
-                    print(f"候选 {idx + 1} LLM 评估得分 {score:.2f}：{evaluation_reason}")
+                    print(f"候选 {idx + 1} LLM 评估得分 {candidate_info['score']:.2f}：{evaluation_reason}")
                 _consider_candidate(candidate_info)
+                best_candidate = candidate_info
+                break
+
+            candidate_infos.append(candidate_info)
+
+            if baseline_output and output:
+                cache_key = f"{candidate_signature}|{_summarize_candidate_changes(candidate)}"
+                candidate_info["cache_key"] = cache_key
+                if cache_key in evaluation_cache:
+                    score, evaluation_reason = evaluation_cache[cache_key]
+                    candidate_info["score"] = score
+                    candidate_info["reason"] = evaluation_reason
+                    if evaluation_reason:
+                        print(f"候选 {idx + 1} LLM 评估得分 {score:.2f}：{evaluation_reason}")
+                    _consider_candidate(candidate_info)
+                else:
+                    pending_eval_indices.append(len(candidate_infos) - 1)
             else:
-                pending_eval_indices.append(len(candidate_infos) - 1)
-        else:
-            _consider_candidate(candidate_info)
+                _consider_candidate(candidate_info)
 
-    _restore_workspace_state(project_root, workspace_snapshot)
+        _restore_workspace_state(project_root, workspace_snapshot_dir)
 
-    if pending_eval_indices and (best_candidate is None or not best_candidate.get("success")):
-        async def _async_evaluate() -> List[Any]:
-            tasks = [
-                _evaluate_candidate_progress_async(
-                    llm,
-                    baseline_output,
-                    candidate_infos[i]["output"],
-                    candidate_infos[i]["payload"],
-                    history_context,
-                    payload,
-                    metadata,
-                )
-                for i in pending_eval_indices
-            ]
-            if not tasks:
-                return []
-            return await asyncio.gather(*tasks, return_exceptions=True)
+        if pending_eval_indices and (best_candidate is None or not best_candidate.get("success")):
+            async def _async_evaluate() -> List[Any]:
+                tasks = [
+                    _evaluate_candidate_progress_async(
+                        llm,
+                        baseline_output,
+                        candidate_infos[i]["output"],
+                        candidate_infos[i]["payload"],
+                        history_context,
+                        payload,
+                        metadata,
+                    )
+                    for i in pending_eval_indices
+                ]
+                if not tasks:
+                    return []
+                return await asyncio.gather(*tasks, return_exceptions=True)
 
-        results = _run_async(_async_evaluate())
-        for list_idx, result in enumerate(results or []):
-            info_index = pending_eval_indices[list_idx]
-            info = candidate_infos[info_index]
-            score: float = info.get("score", 0.0)
-            reason = info.get("reason", "")
-            if isinstance(result, Exception) or result is None:
-                score = score
-                reason = reason
-            else:
-                score, reason = result
-            info["score"] = score
-            info["reason"] = reason
-            cache_key = info.get("cache_key")
-            if cache_key:
-                evaluation_cache[cache_key] = (score, reason)
-            if reason:
-                idx = info["idx"]
-                print(f"候选 {idx + 1} LLM 评估得分 {score:.2f}：{reason}")
-            _consider_candidate(info)
+            results = _run_async(_async_evaluate())
+            for list_idx, result in enumerate(results or []):
+                info_index = pending_eval_indices[list_idx]
+                info = candidate_infos[info_index]
+                score: float = info.get("score", 0.0)
+                reason = info.get("reason", "")
+                if isinstance(result, Exception) or result is None:
+                    score = score
+                    reason = reason
+                else:
+                    score, reason = result
+                info["score"] = score
+                info["reason"] = reason
+                cache_key = info.get("cache_key")
+                if cache_key:
+                    evaluation_cache[cache_key] = (score, reason)
+                if reason:
+                    idx = info["idx"]
+                    print(f"候选 {idx + 1} LLM 评估得分 {score:.2f}：{reason}")
+                _consider_candidate(info)
 
-    if best_candidate is None:
-        for info in candidate_infos:
-            if info.get("score") is not None:
-                if best_candidate is None or info.get("score", float("-inf")) > best_candidate.get("score", float("-inf")) + 1e-6:
-                    best_candidate = info
+        if best_candidate is None:
+            for info in candidate_infos:
+                if info.get("score") is not None:
+                    if best_candidate is None or info.get("score", float("-inf")) > best_candidate.get("score", float("-inf")) + 1e-6:
+                        best_candidate = info
 
-    if best_candidate is None:
-        print("提示: 所有候选修复均无效，已恢复原始内容。")
-        return False
+        if best_candidate is None:
+            print("提示: 所有候选修复均无效，已恢复原始内容。")
+            return False
 
-    best_index = best_candidate["idx"]
-    best_payload = best_candidate["payload"]
-    best_output = best_candidate.get("output", "")
-    best_success = bool(best_candidate.get("success"))
+        best_index = best_candidate["idx"]
+        best_payload = best_candidate["payload"]
+        best_output = best_candidate.get("output", "")
+        best_success = bool(best_candidate.get("success"))
 
-    if 0 <= best_index < len(candidate_markers):
-        marker = candidate_markers[best_index]
-        if marker:
-            _LLM_FIX_PAYLOAD_HISTORY.add(marker)
+        if 0 <= best_index < len(candidate_markers):
+            marker = candidate_markers[best_index]
+            if marker:
+                _LLM_FIX_PAYLOAD_HISTORY.add(marker)
 
-    print(f"attempt {attempt_no} 应用最佳候选 {best_index + 1}/{len(candidates)}，cargo check {'通过' if best_success else '仍未通过'}。")
+        print(f"attempt {attempt_no} 应用最佳候选 {best_index + 1}/{len(candidates)}，cargo check {'通过' if best_success else '仍未通过'}。")
 
-    _apply_fix_payload(project_root, metadata, payload, best_payload)
+        _apply_fix_payload(project_root, metadata, payload, best_payload)
 
-    attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
-    history_entry = _build_history_entry(
-        attempt_no,
-        payload,
-        best_payload,
-        metadata,
-        best_output,
-        best_success,
-        baseline_output,
-    )
-    TRAJECTORY_MEMORY.add(history_entry)
+        attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
+        history_entry = _build_history_entry(
+            attempt_no,
+            payload,
+            best_payload,
+            metadata,
+            best_output,
+            best_success,
+            baseline_output,
+        )
+        TRAJECTORY_MEMORY.add(history_entry)
 
-    if best_success:
-        try:
-            if SAVE_SUCCESS_EXPERIENCE:
-                _record_success_experience(TRAJECTORY_MEMORY, history_entry)
-        except Exception:
-            pass
+        if best_success:
+            try:
+                if SAVE_SUCCESS_EXPERIENCE:
+                    _record_success_experience(TRAJECTORY_MEMORY, history_entry)
+            except Exception:
+                pass
 
-    if not best_success:
-        _restore_workspace_state(project_root, workspace_snapshot)
+        if not best_success:
+            _restore_workspace_state(project_root, workspace_snapshot_dir)
 
-    return best_success
+        return best_success
+    finally:
+        _cleanup_workspace_snapshot(workspace_snapshot_dir)
 
 
 def _compile_after_translation(
