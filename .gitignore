@@ -25,8 +25,6 @@ change.patch
 log_fill.txt
 log_opt.txt
 
-data/
-
 output copy*
 
 contest/

@@ -29,8 +29,16 @@ from element_translation import (
     FUNCTION_SYMBOL_TYPES,
     NON_FUNCTION_SYMBOL_TYPES,
     RustBatch,
+    RustMappingValue,
+    _build_mapping_for_symbols,
+    _compose_c_mapping_key_for_symbol,
     _format_relative_paths,
     _get_swe_agent_instance,
+    _find_mapping_value,
+    _mapping_value_name,
+    _mapping_value_path,
+    _parse_rust_mapping_string,
+    _split_mapping_key,
     _map_c_path_to_rust_relative,
     _normalize_c_key,
     _resolve_relative_c_path,
@@ -64,6 +72,8 @@ RUST_AST_PROJECT_DIR = Path(__file__).resolve().parent / "rust_ast_project"
 _LLM_FIX_PAYLOAD_HISTORY: Set[str] = set()
 
 _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS = {"target", ".git", "__pycache__", ".pytest_cache"}
+
+MappingDict = Dict[str, RustMappingValue]
 
 
 class FixTargetsModel(BaseModel):
@@ -337,7 +347,7 @@ def _retrieve_success_experience_context(query_text: str, top_n: int = SUCCESS_E
 
 def gather_dependency_context_from_project(
     symbols: List[Dict[str, Any]],
-    current_mapping: Dict[str, Optional[str]],
+    current_mapping: MappingDict,
     rust_defs: Dict[str, str],
     depth: int = 1,
 
@@ -398,7 +408,8 @@ def gather_dependency_context_from_project(
                 continue
             seen_dep_keys.add(dep.key())
             c_name = dep.name
-            rust_name = current_mapping.get(c_name)
+            mapping_value = _find_mapping_value(current_mapping, c_name, getattr(dep, "file_path", None))
+            rust_name = _mapping_value_name(mapping_value)
             if not rust_name:
                 continue
             # rust_code = rust_defs.get(rust_name)
@@ -429,7 +440,7 @@ def gather_dependency_context_from_project(
 
 def _collect_dependency_locations_for_symbol(
     symbol: Dict[str, Any],
-    current_mapping: Dict[str, Optional[str]],
+    current_mapping: MappingDict,
 ) -> List[str]:
     locations: List[str] = []
     try:
@@ -483,7 +494,8 @@ def _collect_dependency_locations_for_symbol(
 
     for dep in func_nodes + non_func_nodes:
         c_name = dep.name
-        rust_name = current_mapping.get(c_name)
+        mapping_value = _find_mapping_value(current_mapping, c_name, getattr(dep, "file_path", None))
+        rust_name = _mapping_value_name(mapping_value)
         if not rust_name:
             continue
         try:
@@ -1207,7 +1219,7 @@ def _augment_fix_targets_with_dependencies(
         return targets
 
     mapping_path = rust_output_dir / "mapping_c2r.json"
-    mapping_c2r: Dict[str, str] = {}
+    mapping_c2r: MappingDict = {}
     rust_to_c: Dict[str, Set[str]] = defaultdict(set)
     if mapping_path.exists():
         try:
@@ -1215,10 +1227,16 @@ def _augment_fix_targets_with_dependencies(
                 mapping_payload = json.load(fh) or {}
             raw_mapping = mapping_payload.get("mapping_c2r", {})
             if isinstance(raw_mapping, dict):
-                for c_name, rust_name in raw_mapping.items():
-                    if isinstance(c_name, str) and isinstance(rust_name, str):
-                        mapping_c2r[c_name] = rust_name
-                        rust_to_c[rust_name].add(c_name)
+                for raw_key, raw_value in raw_mapping.items():
+                    if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+                        continue
+                    mapping_value = _parse_rust_mapping_string(raw_value)
+                    if not mapping_value:
+                        continue
+                    mapping_c2r[raw_key] = mapping_value
+                    rust_name = _mapping_value_name(mapping_value)
+                    if rust_name:
+                        rust_to_c[rust_name].add(raw_key)
         except Exception:
             pass
 
@@ -1257,7 +1275,7 @@ def _augment_fix_targets_with_dependencies(
 def _collect_rust_dependencies_for_symbol(
     analyzer: Any,
     rust_symbol: str,
-    mapping_c2r: Dict[str, str],
+    mapping_c2r: MappingDict,
     rust_to_c: Dict[str, Set[str]],
     project_root: Path,
 ) -> List[Tuple[Optional[str], str]]:
@@ -1269,7 +1287,11 @@ def _collect_rust_dependencies_for_symbol(
     seen_dep_keys: Set[str] = set()
     seen_pairs: Set[Tuple[str, str]] = set()
 
-    for c_name in c_candidates:
+    for c_key in c_candidates:
+        mapping_value = mapping_c2r.get(c_key)
+        if not mapping_value:
+            continue
+        c_name, _ = _split_mapping_key(c_key)
         try:
             refs = analyzer.find_symbols_by_name(c_name)
         except Exception:
@@ -1307,8 +1329,9 @@ def _collect_rust_dependencies_for_symbol(
             seen_dep_keys.add(dep.key())
 
             dep_c_name = dep.name
-            rust_dep_name = mapping_c2r.get(dep_c_name)
-            if not isinstance(rust_dep_name, str):
+            dep_mapping = _find_mapping_value(mapping_c2r, dep_c_name, getattr(dep, "file_path", None))
+            rust_dep_name = _mapping_value_name(dep_mapping)
+            if not rust_dep_name:
                 continue
 
             pair = (dep_c_name, rust_dep_name)
@@ -2176,7 +2199,7 @@ def _replace_with_span(dest_path: Path, start_line: int, end_line: int, new_code
 
 def _translate_symbol(
     symbol: Dict[str, Any],
-    current_mapping: Dict[str, Optional[str]],
+    current_mapping: MappingDict,
     rust_defs: Dict[str, str],
     target_rust_names: List[str],
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Optional[str]], Dict[str, List[Dict[str, Any]]]]:
@@ -2240,13 +2263,13 @@ def _generate_and_apply_rust_impl(
     project_root: Path,
     symbol: Dict[str, Any],
     rust_symbol: str,
-    mapping: Dict[str, Optional[str]],
+    mapping: MappingDict,
     rust_defs: Dict[str, str],
     translated_rust: Set[str],
     dest_paths: List[Path],
 ) -> Tuple[bool, Set[Path]]:
     try:
-        items, mapping_c2r, rust_placeholders = _translate_symbol(
+        items, mapping_c2r_raw, rust_placeholders = _translate_symbol(
             symbol,
             mapping,
             rust_defs,
@@ -2256,11 +2279,9 @@ def _generate_and_apply_rust_impl(
         print(f"提示: 生成 {rust_symbol} 的实现失败: {exc}")
         return False, set()
 
-    for mapped_c, mapped_rust in mapping_c2r.items():
-        if not mapped_c or mapped_rust is None:
-            continue
-        mapping[mapped_c] = mapped_rust
-        mapping[_normalize_c_key(mapped_c)] = mapped_rust
+    new_mapping = _build_mapping_for_symbols([symbol], mapping_c2r_raw)
+    if new_mapping:
+        mapping.update(new_mapping)
 
     name_to_code = {
         item.get("name"): item.get("code")
@@ -2275,8 +2296,37 @@ def _generate_and_apply_rust_impl(
 
     replaced_any = False
     updated_paths: Set[Path] = set()
+
+    preferred_rel_paths: Set[str] = set()
+    mapping_key = _compose_c_mapping_key_for_symbol(symbol)
+    if mapping_key:
+        mapping_value = mapping.get(mapping_key)
+        mapping_rel = _mapping_value_path(mapping_value)
+        if mapping_rel:
+            preferred_rel_paths.add(_normalize_c_key(mapping_rel))
+            preferred_rel_paths.add(
+                _normalize_c_key((Path("src") / Path(mapping_rel)).as_posix())
+            )
+
+    concrete_dest_paths = list(dest_paths)
+    for dest_path in concrete_dest_paths:
+        try:
+            rel = dest_path.relative_to(project_root).as_posix()
+            preferred_rel_paths.add(_normalize_c_key(rel))
+        except ValueError:
+            preferred_rel_paths.add(_normalize_c_key(dest_path.as_posix()))
+
     placeholder_matches = rust_placeholders.get(rust_symbol, [])
+    prioritized_matches: List[Dict[str, Any]] = []
+    fallback_matches: List[Dict[str, Any]] = []
     for placeholder in placeholder_matches:
+        file_rel = placeholder.get("file")
+        if isinstance(file_rel, str) and _normalize_c_key(file_rel) in preferred_rel_paths:
+            prioritized_matches.append(placeholder)
+        else:
+            fallback_matches.append(placeholder)
+
+    for placeholder in prioritized_matches + fallback_matches:
         file_rel = placeholder.get("file")
         start_line = placeholder.get("start_line")
         end_line = placeholder.get("end_line")
@@ -2290,8 +2340,6 @@ def _generate_and_apply_rust_impl(
             updated_paths.add(dest_path)
             replaced_any = True
             break
-
-    concrete_dest_paths = list(dest_paths)
 
     if not replaced_any:
         for dest_path in concrete_dest_paths:
@@ -2345,7 +2393,7 @@ def _load_batches() -> List[Dict[str, Any]]:
     return data.get("batches", [])
 
 
-def _load_mapping_sequence() -> Tuple[List[Tuple[str, Optional[str]]], Dict[str, Optional[str]]]:
+def _load_mapping_sequence() -> Tuple[List[Tuple[str, RustMappingValue]], MappingDict]:
     rust_output_dir = load_rust_output_dir()
     mapping_path = rust_output_dir / "mapping_c2r.json"
     if not mapping_path.exists():
@@ -2358,15 +2406,16 @@ def _load_mapping_sequence() -> Tuple[List[Tuple[str, Optional[str]]], Dict[str,
     if not isinstance(raw_mapping, dict):
         return [], {}
 
-    sequence: List[Tuple[str, Optional[str]]] = []
-    mapping: Dict[str, Optional[str]] = {}
-    for c_name, rust_name in raw_mapping.items():
-        if not isinstance(c_name, str):
+    sequence: List[Tuple[str, RustMappingValue]] = []
+    mapping: MappingDict = {}
+    for raw_key, raw_value in raw_mapping.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_value, str):
             continue
-        resolved = rust_name if isinstance(rust_name, str) else None
-        mapping[c_name] = resolved
-        mapping[_normalize_c_key(c_name)] = resolved
-        sequence.append((c_name, resolved))
+        mapping_value = _parse_rust_mapping_string(raw_value)
+        if not mapping_value:
+            continue
+        mapping[raw_key] = mapping_value
+        sequence.append((raw_key, mapping_value))
 
     return sequence, mapping
 
@@ -2378,6 +2427,9 @@ def _build_symbol_lookup(batches: List[Dict[str, Any]]) -> Dict[str, Dict[str, A
             c_name = symbol.get("name") or symbol.get("symbol") or symbol.get("id")
             if not isinstance(c_name, str) or not c_name:
                 continue
+            composed_key = _compose_c_mapping_key_for_symbol(symbol)
+            if composed_key:
+                lookup.setdefault(composed_key, symbol)
             lookup.setdefault(c_name, symbol)
             lookup.setdefault(_normalize_c_key(c_name), symbol)
     return lookup
@@ -2391,7 +2443,7 @@ def main() -> None:
     symbol_lookup = _build_symbol_lookup(batches)
 
     sequence, loaded_mapping = _load_mapping_sequence()
-    mapping: Dict[str, Optional[str]] = dict(loaded_mapping)
+    mapping: MappingDict = dict(loaded_mapping)
     rust_defs: Dict[str, str] = {}
     translated_rust: Set[str] = set()
 
@@ -2400,10 +2452,16 @@ def main() -> None:
         raise RuntimeError("初始 cargo check 未通过，自动修复流程已中止。")
 
     tasks: List[Dict[str, Any]] = []
-    for c_name, rust_name in sequence:
+    for mapping_key, mapping_value in sequence:
+        rust_name = _mapping_value_name(mapping_value)
         if not rust_name:
             continue
-        symbol = symbol_lookup.get(c_name) or symbol_lookup.get(_normalize_c_key(c_name))
+        c_name, _ = _split_mapping_key(mapping_key)
+        symbol = (
+            symbol_lookup.get(mapping_key)
+            or symbol_lookup.get(c_name)
+            or symbol_lookup.get(_normalize_c_key(c_name))
+        )
         if not symbol:
             continue
         if symbol.get("type") != "functions":
@@ -2411,6 +2469,7 @@ def main() -> None:
         dest_paths = _collect_dest_paths(symbol)
         tasks.append(
             {
+                "mapping_key": mapping_key,
                 "c_name": c_name,
                 "rust_name": rust_name,
                 "symbol": symbol,
@@ -2418,7 +2477,7 @@ def main() -> None:
             }
         )
 
-    for idx, task in enumerate(tasks):
+    for task in tasks:
         c_name = task["c_name"]
         rust_name = task["rust_name"]
         symbol = task["symbol"]
@@ -2430,112 +2489,49 @@ def main() -> None:
             print(f"跳过 {rust_name}，未检测到 unimplemented!() 存根。")
             translated_rust.add(rust_name)
         else:
-            items, mapping_c2r, rust_placeholders = _translate_symbol(
+            success, updated_paths = _generate_and_apply_rust_impl(
+                project_root,
                 symbol,
+                rust_name,
                 mapping,
                 rust_defs,
-                [rust_name],
+                translated_rust,
+                dest_paths,
             )
-            effective_mapping = dict(mapping)
-            for mapped_c, mapped_rust in mapping_c2r.items():
-                if not mapped_c or mapped_rust is None:
-                    continue
-                mapping[mapped_c] = mapped_rust
-                mapping[_normalize_c_key(mapped_c)] = mapped_rust
-                effective_mapping[mapped_c] = mapped_rust
-                effective_mapping[_normalize_c_key(mapped_c)] = mapped_rust
+            if not success:
+                continue
 
-            name_to_code = {
-                item.get("name"): item.get("code")
-                for item in items
-                if isinstance(item.get("name"), str) and isinstance(item.get("code"), str)
-            }
+            updated_paths_set: Set[Path] = set(updated_paths)
+            if not updated_paths_set and dest_paths:
+                updated_paths_set.update(dest_paths)
 
-            for rust_symbol, rust_code in name_to_code.items():
-                if rust_code is None:
-                    continue
-                if rust_symbol in translated_rust:
-                    continue
-                workspace_snapshot: Optional[Dict[str, bytes]] = None
-                replaced_any = False
-                updated_paths: Set[Path] = set()
-                placeholder_matches = rust_placeholders.get(rust_symbol, [])
-                for placeholder in placeholder_matches:
-                    file_rel = placeholder.get("file")
-                    start_line = placeholder.get("start_line")
-                    end_line = placeholder.get("end_line")
-                    if not isinstance(file_rel, str) or not isinstance(start_line, int) or not isinstance(end_line, int):
-                        continue
-                    dest_path = project_root / file_rel
-                    if workspace_snapshot is None:
-                        workspace_snapshot = _snapshot_workspace_state(project_root)
-                    replaced = _replace_with_span(dest_path, start_line, end_line, rust_code)
-                    if replaced:
-                        rust_defs[rust_symbol] = rust_code
-                        translated_rust.add(rust_symbol)
-                        updated_paths.add(dest_path)
-                        replaced_any = True
-                        break
+            def regenerate_function_body() -> bool:
+                nonlocal updated_paths_set
+                print(f"提示: 重试过程中重新生成 {rust_name} 的 Rust 实现。")
+                regen_success, regen_paths = _generate_and_apply_rust_impl(
+                    project_root,
+                    symbol,
+                    rust_name,
+                    mapping,
+                    rust_defs,
+                    translated_rust,
+                    dest_paths,
+                )
+                if not regen_success:
+                    return False
+                target_paths = set(regen_paths) if regen_paths else set(dest_paths)
+                if target_paths:
+                    updated_paths_set.update(target_paths)
+                return True
 
-                if not replaced_any:
-                    for dest_path in dest_paths:
-                        if not dest_path.exists():
-                            continue
-                        if workspace_snapshot is None:
-                            workspace_snapshot = _snapshot_workspace_state(project_root)
-                        replaced = _replace_function(dest_path, rust_symbol, rust_code)
-                        if replaced:
-                            rust_defs[rust_symbol] = rust_code
-                            translated_rust.add(rust_symbol)
-                            updated_paths.add(dest_path)
-                            replaced_any = True
-                            break
+            compile_ok = _compile_after_translation(
+                updated_paths_set,
+                failing_symbol=rust_name,
+                regenerate_callback=regenerate_function_body,
+            )
 
-                if replaced_any:
-                    if not updated_paths:
-                        updated_paths.update(task["dest_paths"])
-
-                    def regenerate_function_body() -> bool:
-                        print(f"提示: 重试过程中重新生成 {rust_symbol} 的 Rust 实现。")
-                        if workspace_snapshot is not None:
-                            _restore_workspace_state(project_root, workspace_snapshot)
-                        success, regen_paths = _generate_and_apply_rust_impl(
-                            project_root,
-                            symbol,
-                            rust_symbol,
-                            mapping,
-                            rust_defs,
-                            translated_rust,
-                            dest_paths,
-                        )
-                        if not success and workspace_snapshot is not None:
-                            _restore_workspace_state(project_root, workspace_snapshot)
-                            return False
-                        if success and regen_paths:
-                            updated_paths.update(regen_paths)
-                        elif success and task["dest_paths"]:
-                            updated_paths.update(task["dest_paths"])
-                        return success
-
-                    try:
-                        compile_ok = _compile_after_translation(
-                            updated_paths,
-                            failing_symbol=rust_symbol,
-                            regenerate_callback=regenerate_function_body,
-                        )
-                    except Exception:
-                        if workspace_snapshot is not None:
-                            _restore_workspace_state(project_root, workspace_snapshot)
-                        raise
-
-                    if not compile_ok:
-                        if workspace_snapshot is not None:
-                            _restore_workspace_state(project_root, workspace_snapshot)
-                        raise RuntimeError(f"{rust_symbol} 编译失败，已尝试自动修复。")
-                else:
-                    dest_paths = task["dest_paths"]
-                    target_hint = dest_paths[0].as_posix() if dest_paths else "未知"
-                    print(f"未找到 {rust_symbol} 的 unimplemented!() 存根，文件：{target_hint}")
+            if not compile_ok:
+                raise RuntimeError(f"{rust_name} 编译失败，已尝试自动修复。")
 
     print("填充完成。再次运行 cargo check 验证编译结果。")
 
