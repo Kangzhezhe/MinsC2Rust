@@ -63,6 +63,8 @@ FUNCTION_STUB_PATTERN = "unimplemented!()"
 RUST_AST_PROJECT_DIR = Path(__file__).resolve().parent / "rust_ast_project"
 _LLM_FIX_PAYLOAD_HISTORY: Set[str] = set()
 
+_WORKSPACE_SNAPSHOT_EXCLUDE_DIRS = {"target", ".git", "__pycache__", ".pytest_cache"}
+
 
 class FixTargetsModel(BaseModel):
     files: Dict[str, List[str]] = Field(default_factory=dict)
@@ -1810,43 +1812,52 @@ def _apply_fix_payload(
         except OSError as exc:
             print(f"提示: 写入 {file_rel} 失败，原因: {exc}")
 
-
-def _snapshot_file_contents(
-    project_root: Path,
-    metadata: Dict[str, Dict[str, Any]],
-) -> Dict[str, Optional[str]]:
-    snapshots: Dict[str, Optional[str]] = {}
-    for file_rel in metadata.keys():
-        dest_path = (project_root / file_rel).resolve()
+def _snapshot_workspace_state(project_root: Path) -> Dict[str, bytes]:
+    snapshots: Dict[str, bytes] = {}
+    for path in project_root.rglob("*"):
+        if not path.is_file():
+            continue
         try:
-            dest_path.relative_to(project_root)
+            rel_path = path.relative_to(project_root).as_posix()
         except ValueError:
             continue
-        if dest_path.exists():
-            try:
-                snapshots[file_rel] = dest_path.read_text(encoding="utf-8")
-            except OSError:
-                snapshots[file_rel] = None
-        else:
-            snapshots[file_rel] = None
+        if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts):
+            continue
+        try:
+            snapshots[rel_path] = path.read_bytes()
+        except OSError:
+            snapshots[rel_path] = b""
     return snapshots
 
 
-def _restore_file_contents(
-    project_root: Path,
-    snapshots: Dict[str, Optional[str]],
-) -> None:
-    for file_rel, content in snapshots.items():
-        dest_path = (project_root / file_rel).resolve()
-        try:
-            dest_path.relative_to(project_root)
-        except ValueError:
+def _restore_workspace_state(project_root: Path, snapshots: Dict[str, bytes]) -> None:
+    try:
+        current_files = {
+            rel_path
+            for path in project_root.rglob("*")
+            if path.is_file()
+            for rel_path in [path.relative_to(project_root).as_posix()]
+            if not any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts)
+        }
+    except OSError:
+        current_files = set()
+
+    for rel_path in current_files - snapshots.keys():
+        if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts):
             continue
-        if content is None:
-            continue
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        target = project_root / rel_path
         try:
-            dest_path.write_text(content, encoding="utf-8")
+            target.unlink()
+        except OSError:
+            pass
+
+    for rel_path, content in snapshots.items():
+        if any(part in _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS for part in Path(rel_path).parts):
+            continue
+        target = project_root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.write_bytes(content)
         except OSError:
             pass
 
@@ -1965,7 +1976,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
     candidates = filtered_candidates
     print(f"LLM 提供了 {len(candidates)} 个修复候选。")
 
-    snapshots = _snapshot_file_contents(project_root, metadata)
+    workspace_snapshot = _snapshot_workspace_state(project_root)
 
     baseline_output = error_output or ""
     baseline_error_len = len(baseline_output)
@@ -1977,7 +1988,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
     best_score: float = float("-inf")
 
     for idx, candidate in enumerate(candidates):
-        _restore_file_contents(project_root, snapshots)
+        _restore_workspace_state(project_root, workspace_snapshot)
         _apply_fix_payload(project_root, metadata, payload, candidate)
 
         # 新增验证步骤：检查目标符号是否仍能被提取
@@ -2050,7 +2061,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
                 # 一旦发现通过的候选，提前结束后续候选评估以节省时间
                 break
 
-    _restore_file_contents(project_root, snapshots)
+    _restore_workspace_state(project_root, workspace_snapshot)
 
     if best_payload is None:
         print("提示: 所有候选修复均无效，已恢复原始内容。")
@@ -2083,6 +2094,9 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
                 _record_success_experience(TRAJECTORY_MEMORY, history_entry)
         except Exception:
             pass
+
+    if not best_success:
+        _restore_workspace_state(project_root, workspace_snapshot)
 
     return best_success
 
@@ -2433,6 +2447,7 @@ def main() -> None:
                     continue
                 if rust_symbol in translated_rust:
                     continue
+                workspace_snapshot: Optional[Dict[str, bytes]] = None
                 replaced_any = False
                 updated_paths: Set[Path] = set()
                 placeholder_matches = rust_placeholders.get(rust_symbol, [])
@@ -2443,6 +2458,8 @@ def main() -> None:
                     if not isinstance(file_rel, str) or not isinstance(start_line, int) or not isinstance(end_line, int):
                         continue
                     dest_path = project_root / file_rel
+                    if workspace_snapshot is None:
+                        workspace_snapshot = _snapshot_workspace_state(project_root)
                     replaced = _replace_with_span(dest_path, start_line, end_line, rust_code)
                     if replaced:
                         rust_defs[rust_symbol] = rust_code
@@ -2455,6 +2472,8 @@ def main() -> None:
                     for dest_path in dest_paths:
                         if not dest_path.exists():
                             continue
+                        if workspace_snapshot is None:
+                            workspace_snapshot = _snapshot_workspace_state(project_root)
                         replaced = _replace_function(dest_path, rust_symbol, rust_code)
                         if replaced:
                             rust_defs[rust_symbol] = rust_code
@@ -2469,6 +2488,8 @@ def main() -> None:
 
                     def regenerate_function_body() -> bool:
                         print(f"提示: 重试过程中重新生成 {rust_symbol} 的 Rust 实现。")
+                        if workspace_snapshot is not None:
+                            _restore_workspace_state(project_root, workspace_snapshot)
                         success, regen_paths = _generate_and_apply_rust_impl(
                             project_root,
                             symbol,
@@ -2478,18 +2499,29 @@ def main() -> None:
                             translated_rust,
                             dest_paths,
                         )
+                        if not success and workspace_snapshot is not None:
+                            _restore_workspace_state(project_root, workspace_snapshot)
+                            return False
                         if success and regen_paths:
                             updated_paths.update(regen_paths)
                         elif success and task["dest_paths"]:
                             updated_paths.update(task["dest_paths"])
                         return success
 
-                    compile_ok = _compile_after_translation(
-                        updated_paths,
-                        failing_symbol=rust_symbol,
-                        regenerate_callback=regenerate_function_body,
-                    )
+                    try:
+                        compile_ok = _compile_after_translation(
+                            updated_paths,
+                            failing_symbol=rust_symbol,
+                            regenerate_callback=regenerate_function_body,
+                        )
+                    except Exception:
+                        if workspace_snapshot is not None:
+                            _restore_workspace_state(project_root, workspace_snapshot)
+                        raise
+
                     if not compile_ok:
+                        if workspace_snapshot is not None:
+                            _restore_workspace_state(project_root, workspace_snapshot)
                         raise RuntimeError(f"{rust_symbol} 编译失败，已尝试自动修复。")
                 else:
                     dest_paths = task["dest_paths"]
