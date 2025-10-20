@@ -2,13 +2,12 @@ import atexit
 from functools import partial
 import json
 import os
-import re
 import shlex
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import TYPE_CHECKING, Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, StateGraph  # type: ignore
 from pydantic import BaseModel, Field
@@ -440,45 +439,33 @@ def _read_rust_file_cached(path: Path) -> Optional[str]:
     return text
 
 
-def _extract_rust_item_from_text(rust_name: str, content: str) -> Optional[str]:
-    if not content.strip():
-        return None
-    pattern = re.compile(
-        rf"(?ms)(^pub(?:\([^\n]+\))?(?:\s+\w+)*\s+(?:struct|enum|fn|type|const|static)\s+{re.escape(rust_name)}\b[\s\S]*?)(?=^pub(?:\([^\n]+\))?(?:\s+\w+)*\s+(?:struct|enum|fn|type|const|static)\s+\w|\Z)"
-    )
-    match = pattern.search(content)
-    if match:
-        return match.group(1).strip()
-
-    # Fallback: locate first occurrence of the symbol name following a pub item and grab a window of lines.
-    lines = content.splitlines()
-    for idx, line in enumerate(lines):
-        if "pub" in line and rust_name in line:
-            start = max(idx - 2, 0)
-            end = min(idx + 60, len(lines))
-            snippet = "\n".join(lines[start:end]).strip()
-            if snippet:
-                return snippet
-    return None
-
-
 def _load_rust_code_for_dependency(dep, rust_name: str, rust_defs: Dict[str, str]) -> Optional[str]:
-    candidate_paths = _candidate_dest_paths_for_c_file(dep.file_path)
-    for path in candidate_paths:
-        text = _read_rust_file_cached(path)
-        if text is None:
-            continue
-        snippet = _extract_rust_item_from_text(rust_name, text)
-        if snippet:
+    try:
+        project_root = load_rust_output_dir()
+    except Exception:
+        project_root = None
+
+    matches: List[Dict[str, Any]] = []
+    if project_root:
+        try:
+            matches = _run_rust_symbol_extractor(project_root, rust_name)
+        except Exception:
+            matches = []
+
+    for match in matches:
+        code = match.get("code")
+        if isinstance(code, str) and code.strip():
+            snippet = code.strip()
             rust_defs[rust_name] = snippet
             return snippet
+
+    candidate_paths = _candidate_dest_paths_for_c_file(dep.file_path)
     for path in candidate_paths:
         text = _read_rust_file_cached(path)
         if text is None:
             continue
         trimmed = text.strip()
         if trimmed:
-            # limit to avoid oversized context
             rust_defs[rust_name] = trimmed[:8000]
             return rust_defs[rust_name]
     return None
@@ -826,6 +813,7 @@ def _persist_batch_to_rust(
     items: List[Dict[str, Any]],
     mapping_c2r: Dict[str, "RustMappingValue"],
     full_mapping: Dict[str, "RustMappingValue"],
+    force_flush: bool = False,
 ) -> Set[Path]:
     src_root = _get_rust_src_root()
     if src_root is None:
@@ -941,7 +929,7 @@ def _persist_batch_to_rust(
             continue
         expected_sources = _get_expected_sources_for_dest(dest_path, target_rel)
         completed_sources = _DEST_COMPLETED_SOURCES.get(dest_path, set())
-        ready = not expected_sources or expected_sources.issubset(completed_sources)
+        ready = force_flush or not expected_sources or expected_sources.issubset(completed_sources)
         if not ready:
             continue
         should_flush = dest_path in updated_dest_paths or dest_path not in _DEST_FLUSHED_DESTS
@@ -953,6 +941,85 @@ def _persist_batch_to_rust(
         if _flush_dest_symbol_map(dest_path):
             written_paths.add(dest_path)
     return written_paths
+
+
+def _refresh_rust_defs_from_disk(
+    rust_names: Set[str],
+    mapping: Dict[str, "RustMappingValue"],
+) -> Dict[str, str]:
+    if not rust_names:
+        return {}
+
+    src_root = _get_rust_src_root()
+    try:
+        project_root = load_rust_output_dir()
+    except Exception:
+        project_root = None
+
+    if src_root is None or project_root is None:
+        return {}
+
+    refreshed: Dict[str, str] = {}
+
+    for rust_name in sorted(rust_names):
+        candidate_paths: Set[Path] = set()
+        for value in mapping.values():
+            if _mapping_value_name(value) != rust_name:
+                continue
+            dest_rel = _mapping_value_path(value)
+            if dest_rel:
+                candidate_paths.add(src_root / Path(dest_rel))
+
+        matches: List[Dict[str, Any]] = []
+        try:
+            matches = _run_rust_symbol_extractor(project_root, rust_name)
+        except Exception:
+            matches = []
+
+        selected_code: Optional[str] = None
+        selected_path: Optional[Path] = None
+
+        for match in matches:
+            code = match.get("code")
+            if not isinstance(code, str) or not code.strip():
+                continue
+            selected_code = code.strip()
+            file_entry = match.get("file")
+            if isinstance(file_entry, str) and file_entry.strip():
+                file_path = Path(file_entry)
+                selected_path = file_path if file_path.is_absolute() else project_root / file_path
+            break
+
+        if selected_code is None:
+            for dest_path in candidate_paths:
+                try:
+                    _RUST_FILE_CACHE.pop(dest_path, None)
+                    text = dest_path.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                trimmed = text.strip()
+                if not trimmed:
+                    continue
+                selected_code = trimmed[:8000]
+                selected_path = dest_path
+                break
+
+        if selected_code is None:
+            continue
+
+        refreshed[rust_name] = selected_code
+
+        target_path = selected_path
+        if target_path is None and candidate_paths:
+            target_path = next(iter(candidate_paths))
+
+        if target_path is not None:
+            symbol_map = _DEST_FILE_SYMBOLS.setdefault(target_path, OrderedDict())
+            symbol_map[rust_name] = selected_code
+            _DEST_FLUSHED_DESTS.add(target_path)
+            _RUST_FILE_CACHE.pop(target_path, None)
+
+    return refreshed
 
 
 def _persist_mapping_c2r(mapping: Dict[str, RustMappingValue]) -> None:
@@ -1343,7 +1410,7 @@ def build_batch_prompt(
         "要求：\n"
         "- 使用纯 Rust 安全惯用特性，不使用 unsafe 代码；\n"
         "- 用 mut 关键字声明可变变量；\n"
-        "- 尽量避免使用 `c_void`、`*mut`、`*const` 指针；泛型用途的万能指针或结构体内部万能指针变量考虑使用Rust的泛型<T>，智能指针，泛型结构体，或者容器替代，确保内存安全和所有权管理\n"
+        "- 禁止使用 `c_void` 原始c指针、尽量避免使用`*mut`、`*const` 指针；泛型用途的万能指针或结构体内部万能指针变量考虑使用Rust的泛型<T>，智能指针，泛型结构体，或者容器替代，确保内存安全和所有权管理\n"
         "- 评估并改进数据结构及所有权/借用模型；避免不必要的 Box，可引入 Rc/RefCell/Weak(弱引用防止循环引用，管理父子关系) 等模式；\n"
         "- 如为类型/结构体/函数签名，给出 idiomatic 的 Rust 定义（尽量使用所有权/借用）；\n"
         "- 结构体所有成员使用pub关键字，所有函数，结构体，枚举，全局变量，全局类型定义声明成pub，允许外部访问，生成的所有的rust函数定义前面加pub关键字, 不要出现非pub的函数定义\n"
@@ -1632,6 +1699,9 @@ def translate_batch(
     batch: Dict[str, Any],
     known_mapping: Optional[Dict[str, "RustMappingValue"]] = None,
     known_rust_defs: Optional[Dict[str, str]] = None,
+    on_chunk_translated: Optional[
+        Callable[[Dict[str, Any], List[Dict[str, Any]], Dict[str, "RustMappingValue"], Dict[str, "RustMappingValue"], int, int], None]
+    ] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, "RustMappingValue"]]:
     """对一个 batch 内的所有符号进行转译，按字符阈值拆分处理。"""
     symbols = list(batch.get("symbols", []))
@@ -1677,24 +1747,16 @@ def translate_batch(
     print(f"-------------- [translate_batch] translating symbols {pending_symbols_names}...")
 
     chunks = _chunk_symbols_by_chars(pending_symbols, MAX_CHARS_PER_TRANSLATION)
-    if len(chunks) <= 1:
-        dependency_entries, dependency_summary = gather_dependency_context(pending_symbols, base_mapping, base_rust_defs)
-        items, mapping_c2r = _translate_chunk_with_validation(
-            batch,
-            pending_symbols,
-            dependency_entries,
-            dependency_summary,
-            set(base_rust_defs.keys()),
-            chunk_index=1,
-        )
-        return items, mapping_c2r
-
     aggregated_items: List[Dict[str, Any]] = []
     aggregated_mapping: Dict[str, "RustMappingValue"] = {}
 
     current_mapping = dict(base_mapping)
     current_rust_defs = dict(base_rust_defs)
 
+    if not chunks:
+        return aggregated_items, aggregated_mapping
+
+    total_chunks = len(chunks)
     for chunk_index, chunk in enumerate(chunks, start=1):
         dependency_entries, dependency_summary = gather_dependency_context(chunk, current_mapping, current_rust_defs)
         items, mapping_c2r = _translate_chunk_with_validation(
@@ -1708,13 +1770,33 @@ def translate_batch(
         aggregated_items.extend(items)
         aggregated_mapping.update(mapping_c2r)
 
-        # 更新已知映射和 Rust 定义，供后续 chunk 使用
         current_mapping.update(mapping_c2r)
         for item in items:
             rust_name = item.get("name")
             rust_code = item.get("code")
             if isinstance(rust_name, str) and isinstance(rust_code, str):
                 current_rust_defs[rust_name] = rust_code
+
+        if on_chunk_translated is not None:
+            chunk_batch = dict(batch)
+            chunk_batch["symbols"] = chunk
+            on_chunk_translated(
+                chunk_batch,
+                items,
+                mapping_c2r,
+                dict(current_mapping),
+                chunk_index,
+                total_chunks,
+            )
+
+        refresh_targets = {name for name in current_rust_defs.keys() if isinstance(name, str)}
+        refreshed_defs = _refresh_rust_defs_from_disk(refresh_targets, current_mapping)
+        if refreshed_defs:
+            current_rust_defs.update(refreshed_defs)
+            for item in aggregated_items:
+                rust_name = item.get("name")
+                if isinstance(rust_name, str) and rust_name in refreshed_defs:
+                    item["code"] = refreshed_defs[rust_name]
 
     return aggregated_items, aggregated_mapping
 
@@ -1766,23 +1848,51 @@ def _translation_node(state: BatchState) -> BatchState:
             if isinstance(item, dict) and isinstance(item.get("name"), str) and isinstance(item.get("code"), str)
         }
 
-        items, mapping_c2r = translate_batch(working_batch, existing_mapping, rust_defs)
+        batch_id = batch.get("batch_id", "?")
+
+        def handle_chunk(
+            chunk_batch: Dict[str, Any],
+            chunk_items: List[Dict[str, Any]],
+            chunk_mapping: Dict[str, "RustMappingValue"],
+            combined_mapping: Dict[str, "RustMappingValue"],
+            chunk_index: int,
+            total_chunks: int,
+        ) -> None:
+            written_paths = _persist_batch_to_rust(
+                chunk_batch,
+                chunk_items,
+                chunk_mapping,
+                combined_mapping,
+                force_flush=True,
+            )
+            _persist_mapping_c2r(combined_mapping)
+            if not written_paths:
+                return
+
+            compile_success_local = False
+            for attempt_index in range(COMPILE_MAX_RETRIES):
+                attempt_snapshots = _snapshot_rust_files(written_paths)
+                compile_success_local = _run_swe_agent_compile(written_paths)
+                if compile_success_local:
+                    break
+                _restore_rust_files(attempt_snapshots)
+                print(
+                    f"[batch {batch_id}] chunk {chunk_index}/{total_chunks} 编译未通过，重试中..."
+                )
+            if not compile_success_local:
+                raise RuntimeError(
+                    f"SWE Agent 无法修复编译错误，批次 {batch_id} chunk {chunk_index} 失败。"
+                )
+
+        items, mapping_c2r = translate_batch(
+            working_batch,
+            existing_mapping,
+            rust_defs,
+            on_chunk_translated=handle_chunk,
+        )
 
         aggregated_mapping = dict(state.get("mapping_c2r", {}))
         aggregated_mapping.update(mapping_c2r)
-
-        compile_success = False
-        written_paths = _persist_batch_to_rust(working_batch, items, mapping_c2r, aggregated_mapping)
-        _persist_mapping_c2r(aggregated_mapping)
-        for attempt_index in range(COMPILE_MAX_RETRIES):
-            attempt_snapshots = _snapshot_rust_files(written_paths)
-            compile_success = _run_swe_agent_compile(written_paths)
-            if compile_success:
-                break
-            _restore_rust_files(attempt_snapshots)
-            print("------------------编译未通过，重试中...")
-        if not compile_success:
-            raise RuntimeError(f"SWE Agent 无法修复编译错误，批次 {batch.get('batch_id')} 失败。")
 
         aggregated_items = list(state.get("items", []))
         aggregated_items.extend(items)
