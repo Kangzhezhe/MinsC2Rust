@@ -30,9 +30,9 @@ import sys
 from typing import Dict, List, Optional, Tuple, Iterable, Set, Literal, Union, Mapping, Any
 
 try:  # 兼容直接脚本执行
-    from config import to_absolute_path
+    from config import get_output_dir, to_absolute_path
 except ImportError:  # pragma: no cover
-    from .config import to_absolute_path
+    from .config import get_output_dir, to_absolute_path
 
 try:
     from .symbol_model import normalize_symbol_type
@@ -74,7 +74,10 @@ class Analyzer:
         outputs_dir: Optional[str] = None,
     ) -> None:
         self.analyzer_root = analyzer_root
-        self.outputs_dir = outputs_dir or os.path.join(analyzer_root, "output")
+        if outputs_dir:
+            self.outputs_dir = os.path.abspath(str(outputs_dir))
+        else:
+            self.outputs_dir = str(get_output_dir())
 
         self.path_analysis = os.path.join(self.outputs_dir, "c_project_analysis.json")
         self.path_topo = os.path.join(self.outputs_dir, "symbol_topo_order.json")

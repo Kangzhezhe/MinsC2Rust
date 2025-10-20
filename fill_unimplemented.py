@@ -1770,7 +1770,6 @@ def _request_compile_fixes(
         - 若导入带有紧邻的属性（如 `#[cfg]`），属性与导入会作为同一个数组元素提供。
         - 如需修改某个符号，请在对应键下提供更新后的完整代码。
         - 若需调整导入语句，可在 `extra` 数组中增删或编辑对应字符串；如未改动请省略该字段。
-        - 若编译报错缺少导入语句，请先参考尝试编译器的所有建议，也可按文件路径推导模块层级：去掉 `src/` 前缀与 `.rs` 后缀，将路径段依次映射为 `crate` 下的模块，如 `src/foo.rs -> crate::foo`、`src/module/sub.rs -> crate::module_sub`，示例：`use crate::src_module_b_shared::module_b_value;`。
         - 仅返回确实发生改动的文件；若文件整体未改动，请不要在结果中出现该文件。
         - 对于保留的文件，仅返回发生改动的符号键；符号代码与输入一致时请省略该键。
         - `extra` 与输入完全一致时请省略该键，以减小输出体积。
@@ -2277,6 +2276,7 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
 
         if best_candidate is None:
             print("提示: 所有候选修复均无效，已恢复原始内容。")
+            _restore_workspace_state(project_root, workspace_snapshot_dir)
             return False
 
         best_index = best_candidate["idx"]
@@ -2392,7 +2392,6 @@ def _translate_symbol(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Optional[str]], Dict[str, List[Dict[str, Any]]]]:
     llm = LLM(logger=True)
     parser = TemplateParser("{batch:json:RustBatch}", model_map={"RustBatch": RustBatch})
-
     dependency_entries, dependency_summary = gather_dependency_context_from_project([symbol], current_mapping, rust_defs)
     project_root = load_rust_output_dir()
     rust_placeholders_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -2670,6 +2669,10 @@ def main() -> None:
             continue
         if symbol.get("type") != "functions":
             continue
+        content = symbol.get("full_definition")
+        if not isinstance(content, str) or not content.strip():
+            print(f"跳过 {rust_name}，源 C 函数体为空。")
+            continue
         dest_paths = _collect_dest_paths(symbol)
         file_keys = _collect_metrics_file_keys(project_root, dest_paths)
         tasks.append(
@@ -2744,6 +2747,7 @@ def main() -> None:
                 translated_rust,
                 dest_paths,
             )
+            TRAJECTORY_MEMORY.clear()
             if not regen_success:
                 return False
             target_paths = set(regen_paths) if regen_paths else set(dest_paths)

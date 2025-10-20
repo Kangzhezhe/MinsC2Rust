@@ -261,6 +261,11 @@ version = \"0.1.0\"
 edition = \"2021\"
 
 [dependencies]
+fuse = "0.3.1"
+fuse-sys = "0.0.0"
+libc = "0.2.177"
+lazy_static = "1.5.0"
+time = "0.3.44"
 """
     _write_file(cargo_toml, cargo_toml_content)
 

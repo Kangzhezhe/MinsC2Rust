@@ -26,7 +26,7 @@ ADD config ~/.cargo/
 RUN DEBIAN_FRONTEND=noninteractive apt-get update -y && \
     apt-get install -y git wget bzip2 \
     build-essential libncurses-dev \
-    scons libclang-dev libfuse-dev && \
+    scons libclang-dev libfuse-dev pkg-config && \
     apt-get clean -y
 
 
