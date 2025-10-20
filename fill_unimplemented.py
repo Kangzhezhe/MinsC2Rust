@@ -2435,9 +2435,6 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
             except Exception:
                 pass
 
-        if not best_success:
-            _restore_workspace_state(project_root, workspace_snapshot_dir)
-
         return best_success
     finally:
         _cleanup_workspace_snapshot(workspace_snapshot_dir)
