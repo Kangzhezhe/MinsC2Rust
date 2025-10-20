@@ -174,7 +174,7 @@ class CProjectAnalyzer:
         # 按start_byte排序
         all_elements.sort(key=lambda x: x['start_byte'])
         
-        # 去重：移除被完全包含的元素
+        # 去重：移除被完全包含的元素（结构体内嵌结构体除外）
         filtered_elements = []
         for i, current in enumerate(all_elements):
             is_contained = False
@@ -187,6 +187,12 @@ class CProjectAnalyzer:
                         other['end_byte'] >= current['end_byte'] and
                         (other['start_byte'] != current['start_byte'] or 
                          other['end_byte'] != current['end_byte'])):
+                        # 允许结构体定义被更大结构体/typedef包裹
+                        if (
+                            current.get('_element_type') == 'structs' and
+                            other.get('_element_type') in {'structs', 'typedefs'}
+                        ):
+                            continue
                         is_contained = True
                         break
             

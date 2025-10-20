@@ -76,6 +76,7 @@ FUNCTION_STUB_PATTERN = "unimplemented!()"
 
 RUST_AST_PROJECT_DIR = Path(__file__).resolve().parent / "rust_ast_project"
 _LLM_FIX_PAYLOAD_HISTORY: Set[str] = set()
+_LLM_DUPLICATE_SUMMARY_COUNTER: DefaultDict[str, int] = defaultdict(int)
 
 _WORKSPACE_SNAPSHOT_EXCLUDE_DIRS = {"target", ".git", "__pycache__", ".pytest_cache"}
 
@@ -727,12 +728,10 @@ def _build_candidate_evaluation_prompt(
                     * 报错类型有所改善（如从 borrow 错误降级为简单类型不匹配），记 0 至 0.5；如果只是局部优化或信息不足，可给接近 0 的分数。
                     * 与基准持平（错误完全一致或仅日志顺序不同），记 0并说明原因。
                     * 新增严重错误或原有错误加重，记负分；出现语法破坏、未预期的闭合分隔符等高危问题，分值应低于 -0.5。
+                    * 若修改之后的错误更加深入，给出更高的分数，比如从找不到定义变为类型不匹配，说明代码逻辑更接近正确。
         """
     ).strip()
     return prompt
-
-
-    return "\n".join(normalized_lines)
 
 
 def _summarize_candidate_changes(candidate: Dict[str, Dict[str, Any]]) -> str:
@@ -752,6 +751,27 @@ def _summarize_candidate_changes(candidate: Dict[str, Dict[str, Any]]) -> str:
             entry += " (" + "; ".join(notes) + ")"
         entries.append(entry)
     return "; ".join(entries) if entries else "无显著变更"
+
+
+def _prepare_duplicate_feedback(threshold: int = 1, top_n: int = 5) -> str:
+    """Summarize frequently repeated failed fixes for prompt feedback."""
+    if not _LLM_DUPLICATE_SUMMARY_COUNTER:
+        return ""
+
+    items = [
+        (summary.strip(), count)
+        for summary, count in _LLM_DUPLICATE_SUMMARY_COUNTER.items()
+        if summary.strip() and count >= threshold
+    ]
+    if not items:
+        return ""
+
+    items.sort(key=lambda item: item[1], reverse=True)
+    lines = [
+        f"- {summary}（已重复 {count} 次）"
+        for summary, count in items[: max(1, top_n)]
+    ]
+    return "\n".join(lines)
 
 
 def _generate_candidate_diff_summary(
@@ -1736,6 +1756,7 @@ def _request_compile_fixes(
     payload: Dict[str, Dict[str, Any]],
     history_context: Optional[str] = None,
     experience_context: Optional[str] = None,
+    duplicate_feedback: Optional[str] = None,
 ) -> List[Dict[str, Dict[str, Any]]]:
     if not payload:
         return []
@@ -1761,6 +1782,16 @@ def _request_compile_fixes(
             """
         ).strip()
         experience_section = "\n\n" + experience_block
+    duplicate_section = ""
+    # if duplicate_feedback:
+    #     duplicate_block = textwrap.dedent(
+    #         f"""
+    #         ### 高频失败修复提醒
+    #         下列改动方案已多次尝试且仍未通过，请避免再次生成相同或相似的思路，必须探索全新方案：
+    #         {duplicate_feedback}
+    #         """
+    #     ).strip()
+    #     duplicate_section = "\n\n" + duplicate_block
     prompt = textwrap.dedent(
         f"""
         你是一名经验丰富的 Rust 修复工程师。请依据编译错误以及给定的文件内容，仔细分析错误的原因，对代码编译报错修复以通过 `cargo check`。
@@ -1781,7 +1812,7 @@ def _request_compile_fixes(
         ### 当前编译错误
         {_truncate_text(error_output, 20000)}
 
-        {history_section}{experience_section}
+    {history_section}{experience_section}{duplicate_section}
 
         ### 当前文件内容
         {payload_json}
@@ -2018,6 +2049,86 @@ def _cleanup_workspace_snapshot(snapshot_root: Optional[Path]) -> None:
         pass
 
 
+def _split_function_sections(code: str) -> Optional[Tuple[str, str, str]]:
+    open_idx = code.find("{")
+    if open_idx == -1:
+        return None
+
+    depth = 0
+    close_idx = -1
+    for idx in range(open_idx, len(code)):
+        char = code[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                close_idx = idx
+                break
+
+    if close_idx == -1:
+        return None
+
+    leading = code[: open_idx + 1]
+    body = code[open_idx + 1 : close_idx]
+    trailing = code[close_idx:]
+    return leading, body, trailing
+
+
+def _detect_body_indent(body: str) -> str:
+    for line in body.splitlines():
+        stripped = line.lstrip()
+        if stripped:
+            return line[: len(line) - len(stripped)]
+    return "    "
+
+
+def _extract_body_from_candidate(code: str) -> Optional[str]:
+    candidate = code.strip()
+    if not candidate:
+        return ""
+
+    sections = _split_function_sections(candidate)
+    if sections:
+        _, body, _ = sections
+        return body
+
+    return candidate
+
+
+def _merge_function_body(existing: str, replacement: str) -> Optional[str]:
+    sections = _split_function_sections(existing)
+    if not sections:
+        return None
+
+    leading, _, trailing = sections
+    indent = _detect_body_indent(sections[1])
+    if not indent:
+        indent = "    "
+    if "\n" not in sections[1] and len(indent) < 4:
+        indent = "    "
+
+    new_body = _extract_body_from_candidate(replacement)
+    if new_body is None:
+        return None
+
+    new_body = textwrap.dedent(new_body).strip("\n")
+
+    if new_body:
+        lines = new_body.splitlines()
+        formatted_lines = []
+        for line in lines:
+            if line.strip():
+                formatted_lines.append(f"{indent}{line.rstrip()}")
+            else:
+                formatted_lines.append("")
+        body_block = "\n" + "\n".join(formatted_lines) + "\n"
+    else:
+        body_block = sections[1]
+
+    return f"{leading}{body_block}{trailing}"
+
+
 def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
     llm = LLM(logger=True)
     targets = _extract_fix_targets(llm, error_output)
@@ -2082,12 +2193,14 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         else:
             print(f"尝试 {attempt_no}: 未检索到可缓存的历史成功经验。")
 
+    duplicate_feedback = _prepare_duplicate_feedback()
     candidates = _request_compile_fixes(
         llm,
         error_output,
         payload,
         history_context=history_context,
         experience_context=experience_context,
+        duplicate_feedback=duplicate_feedback,
     )
     if not candidates:
         attempt_no = len(TRAJECTORY_MEMORY.mem) + 1
@@ -2111,6 +2224,12 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
         except TypeError:
             marker = None
         if marker and marker in _LLM_FIX_PAYLOAD_HISTORY:
+            summary = _summarize_candidate_changes(candidate)
+            summary_key = summary.strip() or "未命名的重复候选"
+            _LLM_DUPLICATE_SUMMARY_COUNTER[summary_key] += 1
+            print(
+                f"提示: 候选修复与历史重复（{summary_key}），已重复 {_LLM_DUPLICATE_SUMMARY_COUNTER[summary_key]} 次，跳过。"
+            )
             continue
         filtered_candidates.append(candidate)
         candidate_markers.append(marker)
@@ -2125,6 +2244,10 @@ def _attempt_llm_compile_fix(project_root: Path, error_output: str) -> bool:
             error_excerpt or "无输出",
             "附注: 候选修复均与历史重复，未执行新的 cargo check。",
         ]
+        duplicate_feedback_note = _prepare_duplicate_feedback()
+        if duplicate_feedback_note:
+            note_lines.append("重复失败改动统计:")
+            note_lines.extend(duplicate_feedback_note.splitlines())
         TRAJECTORY_MEMORY.add("\n".join(note_lines).strip())
         print("提示: 候选修复均与历史重复，跳过。")
         return False
@@ -2327,6 +2450,8 @@ def _compile_after_translation(
 ) -> bool:
     # Compile immediately after filling a function to catch regressions early.
     TRAJECTORY_MEMORY.clear()
+    _LLM_FIX_PAYLOAD_HISTORY.clear()
+    _LLM_DUPLICATE_SUMMARY_COUNTER.clear()
     max_fix_rounds = 30
 
     for round_idx in range(max_fix_rounds + 1):
@@ -2377,9 +2502,14 @@ def _replace_with_span(dest_path: Path, start_line: int, end_line: int, new_code
     max_index = len(lines)
     start_idx = min(max(start_line - 1, 0), max_index)
     end_idx = min(max(end_line, start_idx), max_index)
-    new_code_lines = new_code.rstrip("\n").splitlines()
+    existing_snippet = "\n".join(lines[start_idx:end_idx])
 
-    updated_lines = lines[:start_idx] + new_code_lines + lines[end_idx:]
+    merged = _merge_function_body(existing_snippet, new_code)
+    if merged is None:
+        merged = new_code
+
+    merged_lines = merged.rstrip("\n").splitlines()
+    updated_lines = lines[:start_idx] + merged_lines + lines[end_idx:]
     dest_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
     return True
 
@@ -2451,10 +2581,19 @@ def _replace_function(dest_path: Path, rust_name: str, new_code: str) -> bool:
         rf"pub\s+fn\s+{re.escape(rust_name)}\b[\s\S]*?\{{\s*{FUNCTION_STUB_PATTERN}\s*;?\s*\}}",
         re.MULTILINE,
     )
-    if not stub_regex.search(content):
+    match = stub_regex.search(content)
+    if not match:
         return False
-    updated = stub_regex.sub(new_code_text.rstrip(), content, count=1)
-    dest_path.write_text(updated if updated.endswith("\n") else updated + "\n", encoding="utf-8")
+
+    existing_snippet = match.group(0)
+    merged = _merge_function_body(existing_snippet, new_code_text)
+    if merged is None:
+        merged = new_code_text.rstrip()
+
+    updated = content[: match.start()] + merged + content[match.end():]
+    if not updated.endswith("\n"):
+        updated += "\n"
+    dest_path.write_text(updated, encoding="utf-8")
     return True
 
 
@@ -2748,6 +2887,8 @@ def main() -> None:
                 dest_paths,
             )
             TRAJECTORY_MEMORY.clear()
+            _LLM_FIX_PAYLOAD_HISTORY.clear()
+            _LLM_DUPLICATE_SUMMARY_COUNTER.clear()
             if not regen_success:
                 return False
             target_paths = set(regen_paths) if regen_paths else set(dest_paths)

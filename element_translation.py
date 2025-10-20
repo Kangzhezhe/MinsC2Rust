@@ -560,21 +560,79 @@ def _verify_compile_success(context, agent: "SWEAgent", compile_cmd: str, dest_p
             if not project_root:
                 return False, "符号验证失败：未配置 Rust 输出目录。"
 
+            restored_messages: List[str] = []
+            failed_symbols: Set[str] = set()
             is_valid, message, is_fatal = _validate_rust_symbols(
                 mapping_c2r,
                 generated_symbols=set(),
                 known_generated_symbols=set(),
                 project_root=project_root,
+                failed_symbols=failed_symbols,
             )
+
+            if not is_valid and failed_symbols:
+                restored_details = _restore_missing_rust_symbols(failed_symbols, mapping_c2r)
+                if restored_details:
+                    dest_paths.update(restored_details.keys())
+                    for dest_path, symbols in restored_details.items():
+                        rel_path_list = _format_relative_paths({dest_path})
+                        rel_path = rel_path_list[0] if rel_path_list else dest_path.as_posix()
+                        symbol_list = ", ".join(sorted(symbols)) if symbols else "(未知符号)"
+                        restored_messages.append(f"已重新保存丢失的符号 {symbol_list} 到 {rel_path}")
+                    try:
+                        rerun = agent.toolset.run_command(compile_cmd)
+                    except Exception as exc:
+                        return False, f"重新编译以验证恢复符号时失败: {exc}"
+                    if (rerun or {}).get("returncode", 0) == 0:
+                        failed_symbols.clear()
+                        is_valid, message, is_fatal = _validate_rust_symbols(
+                            mapping_c2r,
+                            generated_symbols=set(),
+                            known_generated_symbols=set(),
+                            project_root=project_root,
+                            failed_symbols=failed_symbols,
+                        )
+
             if not is_valid:
                 failure_reason = message or "符号验证失败：未找到映射中的 Rust 符号。请不要删除原有的元素或更改名称。"
+                if restored_messages:
+                    failure_reason += "\n" + "；".join(restored_messages) + "，请重新编译确保编译通过。"
                 if is_fatal:
                     return False, failure_reason
                 return False, failure_reason
 
         rel_list = _format_relative_paths(dest_paths)
         return True, "编译通过"
-    return False, "复验失败，错误信息：" + (rerun.get("stderr", "").strip() or rerun.get("stdout", "").strip() or "无错误输出")
+    base_error = rerun.get("stderr", "").strip() or rerun.get("stdout", "").strip() or "无错误输出"
+    failure_message = "复验失败，错误信息：" + base_error
+    mapping_c2r = _load_persisted_mapping_c2r()
+    if mapping_c2r:
+        restored_messages: List[str] = []
+        missing_snapshot: Set[str] = set()
+        project_root: Optional[Path] = None
+        try:
+            project_root = load_rust_output_dir()
+        except Exception:
+            project_root = None
+        _ = _validate_rust_symbols(
+            mapping_c2r,
+            generated_symbols=set(),
+            known_generated_symbols=set(),
+            project_root=project_root,
+            failed_symbols=missing_snapshot,
+        )
+        if missing_snapshot:
+            restored_details = _restore_missing_rust_symbols(missing_snapshot, mapping_c2r)
+            if restored_details:
+                dest_paths.update(restored_details.keys())
+                for dest_path, symbols in restored_details.items():
+                    rel_path_list = _format_relative_paths({dest_path})
+                    rel_path = rel_path_list[0] if rel_path_list else dest_path.as_posix()
+                    symbol_list = ", ".join(sorted(symbols)) if symbols else "(未知符号)"
+                    restored_messages.append(f"已重新保存丢失的符号 {symbol_list} 到 {rel_path}")
+        if restored_messages:
+            failure_message += "\n" + "；".join(restored_messages) + "，请重新编译确保编译通过。"
+    return False, failure_message
 
 def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
     if not dest_paths:
@@ -583,7 +641,6 @@ def _run_swe_agent_compile(dest_paths: Set[Path]) -> None:
     agent = _get_swe_agent_instance()
     if agent is None:
         return False
-
     try:
         rust_output_dir = load_rust_output_dir()
     except Exception as exc:
@@ -687,6 +744,81 @@ def _restore_rust_files(snapshots: Dict[Path, Optional[str]]) -> None:
             path.write_text(content, encoding="utf-8")
         except Exception as exc:
             print(f"恢复快照失败: {path}: {exc}")
+
+
+def _flush_dest_symbol_map(dest_path: Path) -> bool:
+    symbol_map = _DEST_FILE_SYMBOLS.get(dest_path)
+    if not symbol_map:
+        return False
+
+    content_pieces = [segment.rstrip() for segment in symbol_map.values() if segment.strip()]
+    if not content_pieces:
+        return False
+
+    try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        body_text = "\n\n".join(content_pieces).rstrip()
+        final_text = body_text + "\n"
+        dest_path.write_text(final_text, encoding="utf-8")
+        _RUST_FILE_CACHE.pop(dest_path, None)
+        _DEST_FLUSHED_DESTS.add(dest_path)
+        return True
+    except Exception as exc:
+        print(f"写入 Rust 文件失败: {dest_path}: {exc}")
+        return False
+
+
+def _restore_missing_rust_symbols(
+    missing_symbols: Set[str],
+    mapping_c2r: Dict[str, "RustMappingValue"],
+) -> Dict[Path, Set[str]]:
+    if not missing_symbols:
+        return {}
+
+    src_root = _get_rust_src_root()
+    if src_root is None:
+        return {}
+
+    dest_to_symbols: DefaultDict[Path, Set[str]] = defaultdict(set)
+
+    for key, mapping_value in mapping_c2r.items():
+        rust_name = _mapping_value_name(mapping_value)
+        if not rust_name or rust_name not in missing_symbols:
+            continue
+        dest_rel = _mapping_value_path(mapping_value)
+        if dest_rel:
+            dest_to_symbols[src_root / Path(dest_rel)].add(rust_name)
+
+    for rust_name in missing_symbols:
+        already_mapped = any(rust_name in symbols for symbols in dest_to_symbols.values())
+        if already_mapped:
+            continue
+        for dest_path, symbol_map in _DEST_FILE_SYMBOLS.items():
+            if rust_name in symbol_map:
+                dest_to_symbols[dest_path].add(rust_name)
+                break
+
+    restored_details: Dict[Path, Set[str]] = {}
+
+    for dest_path, symbols in dest_to_symbols.items():
+        symbol_map = _DEST_FILE_SYMBOLS.get(dest_path)
+        if not symbol_map:
+            continue
+
+        unresolved = [name for name in symbols if not symbol_map.get(name)]
+        if unresolved:
+            print(
+                "无法恢复缺失符号: "
+                + ", ".join(sorted(unresolved))
+                + f" (目标文件: {dest_path})"
+            )
+            continue
+
+        _DEST_FLUSHED_DESTS.discard(dest_path)
+        if _flush_dest_symbol_map(dest_path):
+            restored_details[dest_path] = set(symbols)
+
+    return restored_details
 
 
 def _persist_batch_to_rust(
@@ -818,15 +950,8 @@ def _persist_batch_to_rust(
         content_pieces = [segment.rstrip() for segment in symbol_map.values() if segment.strip()]
         if not content_pieces:
             continue
-        try:
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            body_text = "\n\n".join(content_pieces).rstrip()
-            final_text = body_text + "\n"
-            dest_path.write_text(final_text, encoding="utf-8")
+        if _flush_dest_symbol_map(dest_path):
             written_paths.add(dest_path)
-            _DEST_FLUSHED_DESTS.add(dest_path)
-        except Exception as exc:
-            print(f"写入 Rust 文件失败: {dest_path}: {exc}")
     return written_paths
 
 
@@ -1218,8 +1343,7 @@ def build_batch_prompt(
         "要求：\n"
         "- 使用纯 Rust 安全惯用特性，不使用 unsafe 代码；\n"
         "- 用 mut 关键字声明可变变量；\n"
-        "- 尽量避免使用 `c_void`、`*mut`、`*const` 、`Box<dyn Any>`指针，任何ffi操作的类型；泛型用途的万能指针或结构体内部万能指针变量考虑使用Rust的泛型<T>，智能指针，泛型结构体替代，确保内存安全和所有权管理\n"
-        "- 尽量避免使用 `Box<dyn Any>` 类型指针, 比如有prev，next或者parent，child这种可能循环引用的指针，使用Rc/RefCell/Weak\n"
+        "- 尽量避免使用 `c_void`、`*mut`、`*const` 指针；泛型用途的万能指针或结构体内部万能指针变量考虑使用Rust的泛型<T>，智能指针，泛型结构体，或者容器替代，确保内存安全和所有权管理\n"
         "- 评估并改进数据结构及所有权/借用模型；避免不必要的 Box，可引入 Rc/RefCell/Weak(弱引用防止循环引用，管理父子关系) 等模式；\n"
         "- 如为类型/结构体/函数签名，给出 idiomatic 的 Rust 定义（尽量使用所有权/借用）；\n"
         "- 结构体所有成员使用pub关键字，所有函数，结构体，枚举，全局变量，全局类型定义声明成pub，允许外部访问，生成的所有的rust函数定义前面加pub关键字, 不要出现非pub的函数定义\n"
@@ -1229,7 +1353,6 @@ def build_batch_prompt(
         "- 不要使用任何面向对象的特性；如果 C 语言是全局函数，转换成的 Rust 也保持全局函数，不要使用 impl 封装；\n"
         "- 类型转换建议，请严格按照以下要求执行，以避免类型不匹配：\n"
         "  - int, char, unsigned int, unsigned char, float, double, enum, bool 等基本类型转换为 i32, i8, u32, u8, f32, f64、对应枚举或 bool；\n"
-        "  - 对于 void * 等万能指针如果作为泛型用途，则使用泛型 T类型替代。\n"
         "  - C语言字符串或类型转换为 Rust 的 String；\n"
         "  - 一维动态数组优先转换为 Rust的切片操作；\n"
         "  - 不要用带有生命周期参数的泛型类型；\n"
