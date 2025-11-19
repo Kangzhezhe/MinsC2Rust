@@ -1,0 +1,1 @@
+python3 ./Tool/clean.py ./

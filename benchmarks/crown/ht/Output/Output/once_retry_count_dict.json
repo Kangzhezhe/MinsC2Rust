@@ -1,0 +1,21 @@
+{
+    "ht": {
+        "hash_key": 0,
+        "ht_set_entry": 1,
+        "ht_expand": 1,
+        "ht_destroy": 1,
+        "ht_create": 2,
+        "ht_set": 0,
+        "ht_length": 0,
+        "ht_get": 2,
+        "ht_iterator": 1,
+        "ht_next": 1
+    },
+    "test-ht": {
+        "test_ht_update_value": 0,
+        "test_ht_memory_management": 4,
+        "test_ht_set_and_get": 0,
+        "test_ht_create_and_destroy": 0,
+        "test_ht_iterator": 1
+    }
+}

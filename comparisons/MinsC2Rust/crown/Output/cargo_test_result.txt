@@ -1,0 +1,235 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test test_bst ... FAILED
+
+failures:
+
+---- test_bst stdout ----
+
+thread '<unnamed>' panicked at /app/Output/crown/Output/test_project/src/bst.rs:137:5:
+assertion failed: bst.root.is_some()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'test_bst' panicked at tests/test_bst.rs:8:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+
+failures:
+    test_bst
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 18 tests
+test test_buffer_append__grow ... ok
+test test_buffer_append ... ok
+test test_buffer_fill ... FAILED
+test test_buffer_clear ... FAILED
+test test_buffer_append_n ... ok
+test test_buffer_prepend ... ok
+test test_buffer_new_with_size ... FAILED
+test test_buffer_formatting ... FAILED
+test test_buffer_equals ... FAILED
+test test_buffer_prepend_issue_15 ... ok
+test test_buffer_slice__end_overflow ... ok
+test test_buffer_compact ... ok
+test test_buffer_new ... FAILED
+test test_buffer_slice__range_error ... ok
+test test_buffer_trim ... ok
+test test_buffer_indexof ... ok
+test test_buffer_slice ... ok
+test test_buffer_slice__end ... FAILED
+
+failures:
+
+---- test_buffer_fill stdout ----
+
+thread '<unnamed>' panicked at tests/test_buffer.rs:131:5:
+assertion `left == right` failed
+  left: 0
+ right: 5
+
+thread 'test_buffer_fill' panicked at tests/test_buffer.rs:125:1:
+timeout: the function call took 1 ms. Max time 60000 ms
+
+---- test_buffer_clear stdout ----
+
+thread '<unnamed>' panicked at tests/test_buffer.rs:211:5:
+assertion `left == right` failed
+  left: 0
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'test_buffer_clear' panicked at tests/test_buffer.rs:205:1:
+timeout: the function call took 1 ms. Max time 60000 ms
+
+---- test_buffer_new_with_size stdout ----
+
+thread '<unnamed>' panicked at tests/test_buffer.rs:43:5:
+assertion `left == right` failed
+  left: 0
+ right: 1025
+
+thread 'test_buffer_new_with_size' panicked at tests/test_buffer.rs:39:1:
+timeout: the function call took 1 ms. Max time 60000 ms
+
+---- test_buffer_formatting stdout ----
+
+thread '<unnamed>' panicked at src/buffer.rs:187:31:
+byte index 1025 is out of bounds of ``
+
+thread 'test_buffer_formatting' panicked at tests/test_buffer.rs:216:1:
+timeout: the function call took 1 ms. Max time 60000 ms
+
+---- test_buffer_equals stdout ----
+
+thread '<unnamed>' panicked at tests/test_buffer.rs:245:5:
+assertion failed: !buffer_equals(&a, &b)
+
+thread 'test_buffer_equals' panicked at tests/test_buffer.rs:237:1:
+timeout: the function call took 2 ms. Max time 60000 ms
+
+---- test_buffer_new stdout ----
+
+thread '<unnamed>' panicked at tests/test_buffer.rs:34:5:
+assertion `left == right` failed
+  left: 0
+ right: 1025
+
+thread 'test_buffer_new' panicked at tests/test_buffer.rs:30:1:
+timeout: the function call took 1 ms. Max time 60000 ms
+
+---- test_buffer_slice__end stdout ----
+
+thread '<unnamed>' panicked at tests/test_buffer.rs:188:39:
+called `Result::unwrap()` on an `Err` value: "Invalid range"
+
+thread 'test_buffer_slice__end' panicked at tests/test_buffer.rs:184:1:
+timeout: the function call took 1 ms. Max time 60000 ms
+
+
+failures:
+    test_buffer_clear
+    test_buffer_equals
+    test_buffer_fill
+    test_buffer_formatting
+    test_buffer_new
+    test_buffer_new_with_size
+    test_buffer_slice__end
+
+test result: FAILED. 11 passed; 7 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test test_ht_create_and_destroy ... ok
+test test_ht_iterator ... ok
+test test_ht_set_and_get ... FAILED
+test test_ht_memory_management ... ok
+test test_ht_update_value ... FAILED
+
+failures:
+
+---- test_ht_set_and_get stdout ----
+
+thread '<unnamed>' panicked at tests/test_ht.rs:83:5:
+assertion `left == right` failed
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'test_ht_set_and_get' panicked at tests/test_ht.rs:58:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_ht_update_value stdout ----
+
+thread '<unnamed>' panicked at /app/Output/crown/Output/test_project/src/ht.rs:44:32:
+already borrowed: BorrowMutError
+
+thread 'test_ht_update_value' panicked at tests/test_ht.rs:9:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+
+failures:
+    test_ht_set_and_get
+    test_ht_update_value
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test test_node ... ok
+test test_points ... ok
+test test_bounds ... FAILED
+
+failures:
+
+---- test_bounds stdout ----
+
+thread '<unnamed>' panicked at tests/test_quadtree.rs:50:9:
+assertion `left == right` failed
+  left: inf
+ right: 5.0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'test_bounds' panicked at tests/test_quadtree.rs:34:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+
+failures:
+    test_bounds
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test test_rgb ... ok
+test test_hex ... FAILED
+test test_rgba ... FAILED
+test test_to_string ... ok
+
+failures:
+
+---- test_hex stdout ----
+
+thread '<unnamed>' panicked at tests/test_rgba.rs:39:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'test_hex' panicked at tests/test_rgba.rs:35:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_rgba stdout ----
+
+thread '<unnamed>' panicked at tests/test_rgba.rs:27:5:
+assertion `left == right` failed
+  left: 4280156287
+ right: 1966080
+
+thread 'test_rgba' panicked at tests/test_rgba.rs:22:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+
+failures:
+    test_hex
+    test_rgba
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test test_parse_url ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

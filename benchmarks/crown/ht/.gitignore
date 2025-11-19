@@ -1,0 +1,12 @@
+/wordfreq
+/bsearch
+/lsearch
+/demo
+/perflbh
+/perfget-c
+/perfget-go
+/perfset-c
+/perfset-go
+/stats
+/dump
+samples/similar.txt

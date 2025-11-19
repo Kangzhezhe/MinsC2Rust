@@ -1,0 +1,3 @@
+Source,Pass Rate (with test),Pass count (with test),Total count (with test),Pass Rate (without test),Pass count (without test),Total count (without test)
+test-rgba,94.44%,17,18,100.00%,13,13
+Overall,94.44%,17,18,100.00%,13,13

@@ -1,0 +1,43 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test test_rgb ... ok
+test test_rgba ... FAILED
+test test_to_string ... ok
+test test_hex ... FAILED
+
+failures:
+
+---- test_rgba stdout ----
+thread '<unnamed>' panicked at tests/test_rgba.rs:27:5:
+assertion `left == right` failed
+  left: 4280156287
+ right: 1966080
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+thread 'test_rgba' panicked at tests/test_rgba.rs:22:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+---- test_hex stdout ----
+thread '<unnamed>' panicked at tests/test_rgba.rs:39:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+thread 'test_hex' panicked at tests/test_rgba.rs:35:1:
+timeout: the function call took 0 ms. Max time 60000 ms
+
+
+failures:
+    test_hex
+    test_rgba
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

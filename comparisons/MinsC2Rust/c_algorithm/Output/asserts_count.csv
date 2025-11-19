@@ -1,0 +1,16 @@
+Source,Static Assert Count,Dynamic Assert Count
+test-hash-functions,5,0
+test-queue,60,0
+test-compare-functions,26,26
+test-avl-tree,33,6
+test-rb-tree,31,5
+test-binomial-heap,14,50006
+test-arraylist,101,20311
+test-binary-heap,14,4
+test-set,31,32088
+test-hash-table,31,8
+test-bloom-filter,20,20
+test-list,68,209
+test-slist,61,77
+test-trie,55,102205
+test-sortedarray,9,119

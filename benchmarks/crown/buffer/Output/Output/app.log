@@ -1,0 +1,282 @@
+Total time taken for conversion: 00:00:00 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_resize
+child_funs_list: [''], child_funs_c_list: ['buffer_resize']
+Compilation failed for buffer_resize, retrying... 1/11
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:12 seconds, Total retry count: 1, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_length
+child_funs_list: [''], child_funs_c_list: ['buffer_length']
+Compilation failed for buffer_length, retrying... 1/11
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:16 seconds, Total retry count: 2, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_append_n
+child_funs_list: ['buffer_resize'], child_funs_c_list: ['buffer_append_n']
+Compilation failed for buffer_append_n, retrying... 1/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:28 seconds, Total retry count: 3, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_new_with_size
+child_funs_list: [''], child_funs_c_list: ['buffer_new_with_size']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:33 seconds, Total retry count: 3, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_trim_right
+child_funs_list: ['buffer_length'], child_funs_c_list: ['buffer_trim_right']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:39 seconds, Total retry count: 3, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_trim_left
+child_funs_list: [''], child_funs_c_list: ['buffer_trim_left']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:42 seconds, Total retry count: 3, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: buffer_fill
+child_funs_list: [''], child_funs_c_list: ['buffer_fill']
+Compilation failed for buffer_fill, retrying... 1/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:00:50 seconds, Total retry count: 4, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: equal
+child_funs_list: [''], child_funs_c_list: ['equal']
+all_files_list: ['test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Compilation failed for compiling all_files processed_all_files.rs, retrying...
+Failed to compile equal after 9 attempts. Regenerating code...
+all_files_list: ['test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Compilation failed for compiling all_files processed_all_files.rs, retrying...
+Failed to compile equal after 9 attempts. Regenerating code...
+all_files_list: ['test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Compilation failed for compiling all_files processed_all_files.rs, retrying...
+Failed to compile equal after 9 attempts. Regenerating code...
+all_files_list: ['test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Compilation failed for compiling all_files processed_all_files.rs, retrying...
+Failed to compile equal after 9 attempts. Regenerating code...
+all_files_list: ['test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Compilation failed for compiling all_files processed_all_files.rs, retrying...
+Failed to compile equal after 5 regenerations. Skipping...
+Total time taken for conversion: 00:01:15 seconds, Total retry count: 4, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_free
+child_funs_list: [''], child_funs_c_list: ['buffer_free']
+Compilation failed for buffer_free, retrying... 1/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:01:21 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_prepend
+child_funs_list: ['buffer_resize'], child_funs_c_list: ['buffer_prepend']
+Compilation failed for buffer_prepend, retrying... 1/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:01:35 seconds, Total retry count: 6, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_append
+child_funs_list: ['buffer_resize', 'buffer_append_n'], child_funs_c_list: ['buffer_append']
+Compilation failed for buffer_append, retrying... 1/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:01:40 seconds, Total retry count: 7, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_new
+child_funs_list: ['buffer_new_with_size'], child_funs_c_list: ['buffer_new']
+Compilation failed for buffer_new, retrying... 1/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:01:45 seconds, Total retry count: 8, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_size
+child_funs_list: [''], child_funs_c_list: ['buffer_size']
+Compilation failed for buffer_size, retrying... 1/9
+# Trajectory 1: 这一次我修改了`buffer_size`函数的定义，将原本的`pub fn buffer_size(self: &Buffer) -> usize {`改为`pub fn buffer_size(&self) -> usize {`，并在`Buffer`结构体的`impl`块中定义了该函数。报错信息指出`self`参数只能出现在关联函数中，且`self`参数在函数定义中不符合语义要求。
+Compilation failed for buffer_size, retrying... 2/9
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:01:58 seconds, Total retry count: 10, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_slice
+child_funs_list: ['buffer_new_with_size'], child_funs_c_list: ['buffer_slice']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:02:03 seconds, Total retry count: 10, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_new_with_copy
+child_funs_list: ['buffer_new_with_size'], child_funs_c_list: ['buffer_new_with_copy']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:02:06 seconds, Total retry count: 10, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_trim
+child_funs_list: ['buffer_trim_left', 'buffer_trim_right', 'buffer_length'], child_funs_c_list: ['buffer_trim']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:02:08 seconds, Total retry count: 10, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_compact
+child_funs_list: ['buffer_length'], child_funs_c_list: ['buffer_compact']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:02:11 seconds, Total retry count: 10, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_indexof
+child_funs_list: [''], child_funs_c_list: ['buffer_indexof']
+Compilation failed for buffer_indexof, retrying... 1/9
+# Trajectory 1: 这一次我修改了 `buffer_indexof` 函数的定义，将 `self: &Buffer` 改为 `&self`，并调整了函数体中的代码缩进。报错信息指出，`self` 参数只能在关联函数中使用，而原来的 `self: &Buffer` 在函数参数中的使用方式不符合语义要求，导致编译错误。错误发生在代码的第25行，具体错误信息是 "`self` parameter is only allowed in associated functions"。
+Compilation failed for buffer_indexof, retrying... 2/9
+repair function list: dict_keys(['main', 'buffer_indexof'])
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:02:35 seconds, Total retry count: 12, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_clear
+child_funs_list: ['buffer_fill'], child_funs_c_list: ['buffer_clear']
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:02:37 seconds, Total retry count: 12, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_appendf
+child_funs_list: ['buffer_resize', 'buffer_length'], child_funs_c_list: ['buffer_appendf']
+Compilation failed for buffer_appendf, retrying... 1/9
+# Trajectory 1: 这一次我插入了一个新的函数 `fn nearest_multiple_of(base: usize, n: usize) -> usize`，用于计算给定数字 `n` 与 `base` 的最接近的倍数。这一修改是为了解决 `buffer_resize` 函数中调用 `nearest_multiple_of` 时出现的未定义函数错误。报错信息显示 `error[E0425]: cannot find function 'nearest_multiple_of' in this scope`，明确指出在 `buffer_resize` 函数中无法找到 `nearest_multiple_of` 函数。
+Compilation failed for buffer_appendf, retrying... 2/9
+repair function list: dict_keys(['nearest_multiple_of', 'buffer_resize', 'buffer_appendf'])
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:03:23 seconds, Total retry count: 14, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: buffer_equals
+child_funs_list: [''], child_funs_c_list: ['buffer_equals']
+Compilation failed for buffer_equals, retrying... 1/7
+all_files_list: ['buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:03:27 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_prepend
+child_funs_list: ['buffer_new', 'buffer_length', 'buffer_append', 'buffer_new_with_size', 'buffer_free', 'buffer_prepend', 'buffer_resize', 'buffer_append_n'], child_funs_c_list: ['test_buffer_prepend', 'equal']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:03:39 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_new
+child_funs_list: ['buffer_new', 'buffer_length', 'buffer_size', 'buffer_new_with_size', 'buffer_free'], child_funs_c_list: ['test_buffer_new']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:03:46 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_new_with_size
+child_funs_list: ['buffer_size', 'buffer_free', 'buffer_new_with_size', 'buffer_length'], child_funs_c_list: ['test_buffer_new_with_size']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:03:54 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_slice__end_overflow
+child_funs_list: ['buffer_new_with_copy', 'buffer_slice', 'buffer_new_with_size', 'buffer_free', 'equal'], child_funs_c_list: ['test_buffer_slice__end_overflow']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:03 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_compact
+child_funs_list: ['buffer_trim_right', 'buffer_new_with_copy', 'buffer_length', 'buffer_size', 'buffer_compact', 'buffer_trim', 'buffer_new_with_size', 'buffer_trim_left', 'buffer_free', 'equal'], child_funs_c_list: ['test_buffer_compact']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:13 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_append
+child_funs_list: ['buffer_new', 'buffer_length', 'buffer_append', 'buffer_new_with_size', 'buffer_free', 'equal', 'buffer_resize', 'buffer_append_n'], child_funs_c_list: ['test_buffer_append']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:21 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_append_n
+child_funs_list: ['buffer_new', 'buffer_length', 'buffer_new_with_size', 'buffer_free', 'equal', 'buffer_resize', 'buffer_append_n'], child_funs_c_list: ['test_buffer_append_n']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:28 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_append__grow
+child_funs_list: ['buffer_length', 'buffer_size', 'buffer_append', 'buffer_new_with_size', 'buffer_free', 'equal', 'buffer_resize', 'buffer_append_n'], child_funs_c_list: ['test_buffer_append__grow']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:38 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_prepend_issue_15
+child_funs_list: ['buffer_new', 'buffer_length', 'buffer_append', 'buffer_new_with_size', 'buffer_free', 'buffer_prepend', 'buffer_resize', 'equal', 'buffer_append_n'], child_funs_c_list: ['test_buffer_prepend_issue_15']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:48 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_fill
+child_funs_list: ['buffer_new_with_copy', 'buffer_length', 'buffer_fill', 'buffer_new_with_size', 'buffer_free'], child_funs_c_list: ['test_buffer_fill']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:04:55 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_indexof
+child_funs_list: ['buffer_free', 'buffer_indexof', 'buffer_new_with_size', 'buffer_new_with_copy'], child_funs_c_list: ['test_buffer_indexof']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:05:03 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_trim
+child_funs_list: ['buffer_trim_right', 'buffer_new_with_copy', 'buffer_length', 'buffer_trim', 'buffer_trim_left', 'buffer_new_with_size', 'buffer_free', 'equal'], child_funs_c_list: ['test_buffer_trim']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:05:15 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_slice__range_error
+child_funs_list: ['buffer_free', 'buffer_slice', 'buffer_new_with_size', 'buffer_new_with_copy'], child_funs_c_list: ['test_buffer_slice__range_error']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:05:23 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_slice__end
+child_funs_list: ['buffer_new_with_copy', 'buffer_slice', 'buffer_new_with_size', 'buffer_free', 'equal'], child_funs_c_list: ['test_buffer_slice__end']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:05:32 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_clear
+child_funs_list: ['buffer_new_with_copy', 'buffer_fill', 'buffer_length', 'buffer_clear', 'buffer_new_with_size', 'buffer_free'], child_funs_c_list: ['test_buffer_clear']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:05:40 seconds, Total retry count: 15, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_formatting
+child_funs_list: ['buffer_new', 'buffer_length', 'buffer_appendf', 'buffer_new_with_size', 'buffer_free', 'equal', 'buffer_resize'], child_funs_c_list: ['test_buffer_formatting']
+Compilation failed for test_buffer_formatting, retrying... 1/7
+# Trajectory 1: 这一次我将 `buffer_appendf` 函数的 `args` 参数从 `std::fmt::Arguments` 类型改为 `Vec<String>` 类型，并在函数内部将 `args` 通过 `format!` 宏转换为字符串后传递给 `std::fmt::write`。具体修改的语句是将 `let result = std::fmt::write(&mut s, args);` 改为 `let result = std::fmt::write(&mut s, format!("{}", args.join(" ")));`。然而，报错信息指出 `format!` 宏返回的是 `String` 类型，而 `std::fmt::write` 期望的是 `Arguments<'_>` 类型，导致类型不匹配错误。
+Compilation failed for test_buffer_formatting, retrying... 2/7
+repair function list: dict_keys(['buffer_appendf', 'test_buffer_formatting'])
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:06:30 seconds, Total retry count: 17, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_equals
+child_funs_list: ['buffer_new_with_copy', 'buffer_append', 'buffer_new_with_size', 'buffer_equals', 'buffer_free', 'buffer_resize', 'buffer_append_n'], child_funs_c_list: ['test_buffer_equals']
+Compilation failed for test_buffer_equals, retrying... 1/7
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion: 00:06:41 seconds, Total retry count: 18, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_buffer_slice
+child_funs_list: ['buffer_new', 'buffer_append', 'buffer_slice', 'buffer_new_with_size', 'buffer_free', 'equal', 'buffer_resize', 'buffer_append_n'], child_funs_c_list: ['test_buffer_slice']
+all_files_list: ['buffer', 'test-buffer']
+all_files:['test-buffer', 'buffer']
+Processing extra insert
+Total time taken for conversion :00:06:50 seconds, Total retry count: 18, Total regenerate count: 4,Total error count:1, Total error funcs:[]

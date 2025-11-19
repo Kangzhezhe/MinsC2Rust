@@ -1,0 +1,8 @@
+{
+    "urlparser": {
+        "ParseURL": 0
+    },
+    "test-urlparser": {
+        "test_parse_url": 0
+    }
+}

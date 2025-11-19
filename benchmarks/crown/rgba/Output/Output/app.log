@@ -1,0 +1,136 @@
+Total time taken for conversion: 00:00:00 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: rgba_from_rgba
+child_funs_list: [''], child_funs_c_list: ['rgba_from_rgba']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:00:08 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: h
+child_funs_list: [''], child_funs_c_list: ['h']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:00:15 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: rgba_from_rgb
+child_funs_list: ['rgba_from_rgba'], child_funs_c_list: ['rgba_from_rgb']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:00:18 seconds, Total retry count: 0, Total regenerate count: 0, Total error count:0
+################################################################################################## Processing func: rgba_from_hex6_string
+child_funs_list: ['rgba_from_rgb', 'rgba_from_rgba', 'h'], child_funs_c_list: ['rgba_from_hex6_string']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Compilation failed for compiling all_files processed_all_files.rs, retrying...
+Failed to compile rgba_from_hex6_string after 11 attempts. Regenerating code...
+Compilation failed for rgba_from_hex6_string, retrying... 1/11
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:00:37 seconds, Total retry count: 1, Total regenerate count: 1, Total error count:0
+################################################################################################## Processing func: rgba_from_hex3_string
+child_funs_list: ['rgba_from_rgb', 'rgba_from_rgba', 'h'], child_funs_c_list: ['rgba_from_hex3_string']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:00:42 seconds, Total retry count: 1, Total regenerate count: 1, Total error count:0
+################################################################################################## Processing func: rgba_from_rgba_string
+child_funs_list: ['rgba_from_rgba'], child_funs_c_list: ['rgba_from_rgba_string']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:01:03 seconds, Total retry count: 1, Total regenerate count: 1, Total error count:0
+################################################################################################## Processing func: rgba_from_hex_string
+child_funs_list: ['rgba_from_rgb', 'rgba_from_hex6_string', 'rgba_from_hex3_string', 'rgba_from_rgba', 'h'], child_funs_c_list: ['rgba_from_hex_string']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:01:08 seconds, Total retry count: 1, Total regenerate count: 1, Total error count:0
+################################################################################################## Processing func: rgba_from_name_string
+child_funs_list: [''], child_funs_c_list: ['rgba_from_name_string']
+Compilation failed for rgba_from_name_string, retrying... 1/9
+Failed to compile rgba_from_name_string after 9 attempts. Regenerating code...
+# Trajectory 1: 这一次我修改了代码中的错误，原本的代码是一个Rust结构体 `NamedColor` 和一个常量数组 `NAMED_COLORS`，但在修改过程中，代码被错误地替换为“请求出错: Request timed out.”，导致代码结构被破坏。报错信息显示在代码的第43行，错误内容是“请求出错: Request timed out.”，报错信息指出在这一行期望的是 `!` 或 `::`，但实际遇到了 `:`，因此编译失败。
+Compilation failed for rgba_from_name_string, retrying... 1/9
+Failed to compile rgba_from_name_string after 9 attempts. Regenerating code...
+# Trajectory 1: 这一次我修改了代码中的报错信息部分，将原本的“请求出错: Request timed out.”语句保留，但未对代码结构进行实质性修改。报错信息显示在代码的第43行，错误内容是“expected one of `!` or `::`, found `:`”，即编译器期望在冒号位置看到`!`或`::`，但实际找到了冒号。这表明代码中存在语法错误，导致编译器无法正确解析该行代码。
+Compilation failed for rgba_from_name_string, retrying... 1/9
+Failed to compile rgba_from_name_string after 9 attempts. Regenerating code...
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 01:02:37 seconds, Total retry count: 4, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: rgba_from_rgb_string
+child_funs_list: ['rgba_from_rgb', 'rgba_from_rgba'], child_funs_c_list: ['rgba_from_rgb_string']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 01:02:51 seconds, Total retry count: 4, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: rgba_from_string
+child_funs_list: ['rgba_from_rgb', 'rgba_from_hex6_string', 'rgba_from_rgba_string', 'rgba_from_name_string', 'rgba_from_hex_string', 'rgba_from_rgb_string', 'rgba_from_hex3_string', 'rgba_from_rgba', 'h'], child_funs_c_list: ['rgba_from_string']
+Compilation failed for rgba_from_string, retrying... 1/9
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 01:05:16 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: rgba_to_string
+child_funs_list: [''], child_funs_c_list: ['rgba_to_string']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 01:05:28 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: rgba_new
+child_funs_list: [''], child_funs_c_list: ['rgba_new']
+all_files_list: ['rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 01:05:39 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: test_rgb
+child_funs_list: ['rgba_from_rgb', 'rgba_from_hex6_string', 'rgba_from_rgba_string', 'rgba_from_name_string', 'rgba_from_hex_string', 'rgba_from_string', 'rgba_from_rgb_string', 'rgba_from_hex3_string', 'rgba_from_rgba', 'h'], child_funs_c_list: ['test_rgb']
+all_files_list: ['rgba', 'test-rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Failed to parse JSON response, regenerating...
+Compilation failed for json processed_all_files.rs, retrying...
+Total time taken for conversion: 00:00:00 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: test_to_string
+child_funs_list: ['rgba_to_string', 'rgba_new'], child_funs_c_list: ['test_to_string']
+all_files_list: ['rgba', 'test-rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:02:11 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:0
+################################################################################################## Processing func: test_named
+child_funs_list: ['rgba_from_hex3_string', 'h', 'rgba_from_hex6_string', 'rgba_from_name_string', 'rgba_from_hex_string', 'rgba_from_rgba_string', 'rgba_from_rgb', 'rgba_from_string', 'rgba_from_rgb_string', 'rgba_from_rgba'], child_funs_c_list: ['test_named']
+all_files_list: ['rgba', 'test-rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Failed to parse JSON response, regenerating...
+Compilation failed for json processed_all_files.rs, retrying...
+Compilation failed for json processed_all_files.rs, retrying...
+Compilation failed for json processed_all_files.rs, retrying...
+Compilation failed for json processed_all_files.rs, retrying...
+Compilation failed for json processed_all_files.rs, retrying...
+Compilation failed for json processed_all_files.rs, retrying...
+Failed to parse JSON response, regenerating...
+Compilation failed for json processed_all_files.rs, retrying...
+Failed to parse JSON response, skipping...
+Total time taken for conversion: 00:13:47 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_rgba
+child_funs_list: ['rgba_from_hex3_string', 'h', 'rgba_from_hex6_string', 'rgba_from_name_string', 'rgba_from_hex_string', 'rgba_from_rgba_string', 'rgba_from_rgb', 'rgba_from_string', 'rgba_from_rgb_string', 'rgba_from_rgba'], child_funs_c_list: ['test_rgba']
+all_files_list: ['rgba', 'test-rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:25:49 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_hex
+child_funs_list: ['rgba_from_hex3_string', 'h', 'rgba_from_hex6_string', 'rgba_from_name_string', 'rgba_from_hex_string', 'rgba_from_rgba_string', 'rgba_from_rgb', 'rgba_from_string', 'rgba_from_rgb_string', 'rgba_from_rgba'], child_funs_c_list: ['test_hex']
+all_files_list: ['rgba', 'test-rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion: 00:38:17 seconds, Total retry count: 5, Total regenerate count: 4, Total error count:1
+################################################################################################## Processing func: test_rgb
+child_funs_list: ['rgba_from_hex3_string', 'h', 'rgba_from_hex6_string', 'rgba_from_name_string', 'rgba_from_hex_string', 'rgba_from_rgba_string', 'rgba_from_rgb', 'rgba_from_string', 'rgba_from_rgb_string', 'rgba_from_rgba'], child_funs_c_list: ['test_rgb']
+all_files_list: ['rgba', 'test-rgba']
+all_files:['test-rgba', 'rgba']
+Processing extra insert
+Total time taken for conversion :00:40:45 seconds, Total retry count: 5, Total regenerate count: 4,Total error count:1, Total error funcs:[]

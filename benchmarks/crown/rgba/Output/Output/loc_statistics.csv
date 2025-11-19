@@ -1,0 +1,3 @@
+Source,LOC,Total LOC,LCov,Rust LOC
+test-rgba,364,371,98.11%,256
+Overall,364,371,98.11%,256

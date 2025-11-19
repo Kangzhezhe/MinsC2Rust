@@ -1,0 +1,6 @@
+*.log
+build
+*.dblite
+.DS_Store
+docs/_build
+Output

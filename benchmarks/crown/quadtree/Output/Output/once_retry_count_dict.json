@@ -1,0 +1,32 @@
+{
+    "quadtree": {
+        "quadtree_point_new": 0,
+        "quadtree_node_new": 1,
+        "quadtree_bounds_extend": 1,
+        "quadtree_bounds_new": 1,
+        "quadtree_point_free": 0,
+        "node_contains_": 1,
+        "quadtree_node_isleaf": 0,
+        "quadtree_node_with_bounds": 0,
+        "quadtree_node_reset": 1,
+        "elision_": 1,
+        "get_quadrant_": 1,
+        "quadtree_node_ispointer": 0,
+        "split_node_": 2,
+        "quadtree_bounds_free": 1,
+        "find_": 0,
+        "quadtree_node_free": 0,
+        "quadtree_search": 1,
+        "quadtree_insert": 0,
+        "quadtree_free": 2,
+        "quadtree_new": 0,
+        "quadtree_walk": 0
+    },
+    "test-quadtree": {
+        "ascent": 4,
+        "descent": 3,
+        "test_bounds": 0,
+        "test_points": 0,
+        "test_node": 1
+    }
+}

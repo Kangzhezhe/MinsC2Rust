@@ -1,0 +1,3 @@
+Source,LOC,Total LOC,LCov,Rust LOC
+test-buffer,422,422,100.00%,450
+Overall,422,422,100.00%,450

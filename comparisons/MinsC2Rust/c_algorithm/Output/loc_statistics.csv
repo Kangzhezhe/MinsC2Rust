@@ -1,0 +1,22 @@
+Source,LOC,Total LOC,LCov,Rust LOC,Func Count,Max Fn Len,Mean Fn Len
+test-slist,888,1012,87.7%,753,36,82,26.8
+test-avl-tree,972,972,100.0%,705,38,69,24.2
+test-tinyexpr,34,80,42.5%,0,46,1,1.0
+test-bloom-filter,520,537,96.8%,283,17,47,28.8
+test-list,1035,1114,92.9%,758,38,97,28.1
+test-arraylist,716,716,100.0%,493,25,76,26.7
+test-compare-functions,296,296,100.0%,199,17,43,16.0
+test-trie,920,920,100.0%,624,28,87,31.2
+test-sortedarray,472,509,92.7%,359,25,62,17.9
+test-set,1083,1166,92.9%,675,37,67,29.8
+test-binary-heap,412,412,100.0%,223,13,83,27.6
+test-utf8-decoder,34,35,97.1%,0,1,1,1.0
+test-rb-tree,760,760,100.0%,666,37,61,18.9
+alloc-testing,1,1,100.0%,0,0,0,0.0
+framework,34,36,94.4%,0,2,1,1.0
+test-queue,537,537,100.0%,343,19,44,26.2
+test-hash-table,887,972,91.3%,544,31,93,28.9
+test-binomial-heap,700,700,100.0%,412,21,145,30.3
+test-alloc-testing,34,40,85.0%,0,6,1,1.0
+test-hash-functions,102,169,60.4%,41,9,27,16.4
+Overall,10437,10984,95.0%,7078,446,145,22.6
