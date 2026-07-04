@@ -7,6 +7,7 @@ from dataclasses import dataclass
 _CONFIG_INHERIT_SECTION = "Config"
 _CONFIG_INHERIT_KEYS = ("inherits", "extends", "base_config")
 _PATH_SECTION = "Paths"
+_PATH_KEYS_TO_KEEP_LITERAL = {"output_project_name"}
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,8 @@ def read_config(config_path):
         if current.has_section(_PATH_SECTION):
             base_dir = os.path.dirname(os.path.abspath(path))
             for key, value in list(current.items(_PATH_SECTION)):
+                if key in _PATH_KEYS_TO_KEEP_LITERAL:
+                    continue
                 raw_value = str(value or "").strip()
                 if not raw_value:
                     continue

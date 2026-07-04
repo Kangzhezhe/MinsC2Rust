@@ -102,6 +102,31 @@ tmp_dir = ../../benchmarks/case/Output/tmp
             self.assertEqual(cfg["Paths"]["src_dir"], str((exp_root / "../../benchmarks/case/src").resolve()))
             self.assertEqual(cfg["Paths"]["tmp_dir"], str((exp_root / "../../benchmarks/case/Output/tmp").resolve()))
 
+    def test_read_config_keeps_output_project_name_literal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_root = root / "configs"
+            config_root.mkdir()
+            config = config_root / "config.ini"
+            config.write_text(
+                """
+[Paths]
+output_dir = ../Output/example/Output
+output_project_name = test_project
+tmp_dir = ../Output/example/tmp
+compile_commands_path = ../benchmarks/example/build/compile_commands.json
+
+[Params]
+max_retries = 5
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            cfg = read_config(str(config))
+
+            self.assertEqual(cfg["Paths"]["output_project_name"], "test_project")
+            self.assertEqual(cfg["Paths"]["output_dir"], str((config_root / "../Output/example/Output").resolve()))
+
     def test_read_config_resolves_inherited_paths_relative_to_declaring_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
