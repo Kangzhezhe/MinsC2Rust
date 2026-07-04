@@ -1,0 +1,32 @@
+[project]
+name = "tool-c-to-rust-pipeline"
+version = "0.1.0"
+description = "Research pipeline for C-to-Rust translation experiments."
+requires-python = ">=3.10"
+dependencies = [
+    "graphviz",
+    "pycparser",
+    "openai",
+    "anthropic",
+    "tqdm",
+    "ipdb",
+    "aiohttp",
+    "httpx[socks]",
+    "prompt_toolkit",
+    "pydantic",
+    "python-dotenv",
+    "rich",
+    "tomli",
+    "clang==14.0.0",
+    "PyYAML",
+    "zhipuai",
+    "streamlit>=1.27",
+    "matplotlib",
+    "tree-sitter>=0.23.0",
+    "tree-sitter-rust>=0.21.0",
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["Tool_py/tests"]
+pythonpath = ["Tool_py", "Tool_py/src"]

@@ -3,8 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+  else
+    PYTHON_BIN="$(command -v python3)"
+  fi
+fi
+
 cd "${ROOT_DIR}"
-.venv/bin/python Tool/Tool_py/smoke_runner.py run-arraylist-reference-smoke \
+"${PYTHON_BIN}" Tool/Tool_py/smoke_runner.py run-arraylist-reference-smoke \
   --tool-py-root Tool/Tool_py \
   --base-config configs/config.ini \
   --derived-config /tmp/tool_py_arraylist_real_smoke_reference_aligned.ini \
