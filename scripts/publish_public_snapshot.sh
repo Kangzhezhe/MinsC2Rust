@@ -90,6 +90,7 @@ paths=(
   LICENSE
   README.md
   README_zh.md
+  assets/framework.png
   Tool/CMakeLists.txt
   Tool/LICENSE
   Tool/pyproject.toml

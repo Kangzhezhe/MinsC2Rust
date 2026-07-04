@@ -1,46 +1,62 @@
 # MinsC2Rust
 
-MinsC2Rust is an LLM-assisted C-to-Rust transpilation pipeline. It decomposes a C project into function-level units, translates functions with dependency context, verifies generated Rust with Cargo, and reconstructs a testable Rust project.
+Code release for **MinsC2Rust: LLM-Driven Project-Level Code Migration from C to Safe Rust**.
 
-This repository is being prepared as the public core release. The first public scope is intentionally small:
+MinsC2Rust is a project-level C-to-Rust migration framework. It follows a
+**divide-transpile-reconstruct** workflow: analyze dependencies in a C project,
+build self-contained function units, transpile them with LLM and compiler
+feedback, and reconstruct a Rust project that preserves the original file
+organization and inter-function call relations.
 
-- core transpilation tool: `Tool/`
-- CC-MINI runtime repair agent: `cc_mini/`
-- repository entry scripts: `scripts/`
-- public benchmarks: `benchmarks/arraylist/`, `benchmarks/c-algorithm/`, and `benchmarks/crown/Input/`
-- root-level runtime configs: `configs/`
+Paper: [MinsC2Rust: LLM-driven project-level code migration from C to safe Rust](https://doi.org/10.1007/s10664-026-10905-4)
 
-`ds-free-api/` is a private service and is not required by this public release. Any OpenAI-compatible endpoint can be used.
+Artifact DOI: [10.5281/zenodo.17651630](https://doi.org/10.5281/zenodo.17651630)
 
 Chinese documentation is available in [README_zh.md](README_zh.md).
+
+## Framework
+
+![MinsC2Rust framework](assets/framework.png)
+
+MinsC2Rust consists of four components:
+
+1. **CBTO: Callgraph-Based Transpilation Orchestration**
+   Builds a function call graph and schedules functions in dependency-aware order.
+2. **SCFC: Self-Contained Function Construction**
+   Builds function units that include the function body plus required non-function elements such as types, macros, and globals.
+3. **LDFT: LLM-Driven Function Transpilation**
+   Transpiles function units with nearby Rust dependencies and repairs compilation failures using compiler feedback.
+4. **PLAR: Project-Level Architecture Reconstruction**
+   Deduplicates generated Rust code and reconstructs a complete Rust project.
 
 ## Repository Layout
 
 ```text
 .
-├── Tool/                  # Main transpilation pipeline
-├── cc_mini/               # Optional agent fallback for runtime/test repair
-├── configs/               # Runtime configuration files
-├── benchmarks/            # Public C input benchmarks
-│   ├── arraylist/         # Default smoke benchmark
-│   ├── c-algorithm/       # Larger algorithm/data-structure benchmark
-│   └── crown/Input/       # Curated Crown input subset
-├── scripts/               # Convenience entrypoints
+├── Tool/                  # Main C-to-Rust migration pipeline
+├── cc_mini/               # Runtime/test repair agent
+├── configs/               # Example runtime configs
+├── benchmarks/            # Public C benchmarks
+│   ├── arraylist/         # Small smoke benchmark
+│   ├── c-algorithm/       # Larger data-structure benchmark
+│   └── crown/Input/       # Curated Crown benchmark subset
+├── scripts/               # Convenience scripts
+├── assets/                # README figures
 ├── .cc-mini.example.toml  # CC-MINI config template
 └── README.md
 ```
 
-Generated files are written to `Output/` and are ignored by Git.
+Generated results are written to `Output/`, which is ignored by Git.
 
-## Requirements
+## Installation
 
 Tested environment:
 
 - Python 3.12
-- Rust stable
-- Cargo
+- Rust stable and Cargo
 - Clang / libclang
 - CMake and basic C build tools
+- Graphviz and universal-ctags
 - An OpenAI-compatible LLM endpoint
 
 Ubuntu/Debian example:
@@ -58,9 +74,10 @@ rustup component add rustfmt
 Python environment:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
+git clone https://github.com/Kangzhezhe/MinsC2Rust.git
 cd MinsC2Rust
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -r Tool/requirements.txt
@@ -68,19 +85,15 @@ uv pip install -r Tool/requirements.txt
 
 ## Configuration
 
-MinsC2Rust uses two independent LLM configurations.
+MinsC2Rust uses two local configuration files. Both are ignored by Git.
 
-### 1. Main Transpilation Config
-
-The main pipeline reads INI files from the root-level `configs/` directory.
-
-Create a local private config:
+### Main Translation Model
 
 ```bash
 cp configs/config.example.ini configs/config.ini
 ```
 
-Edit `configs/config.ini` and set your main translation model:
+Edit `configs/config.ini`:
 
 ```ini
 [LLM_API_Keys]
@@ -89,22 +102,7 @@ openai_api_key = YOUR_TOOL_API_KEY
 openai_model = your-model-name
 ```
 
-`configs/config.ini` is ignored by Git. Do not commit real API keys.
-
-The default public config is `configs/config.example.ini`, which targets the `arraylist` smoke benchmark. Two larger public benchmark configs are also included:
-
-```text
-configs/config_c_algorithm.ini
-configs/config_crown.ini
-```
-
-These child configs inherit common settings from `configs/config.example.ini` and only override the benchmark paths and exclusions.
-
-### 2. CC-MINI Agent Config
-
-CC-MINI is used by runtime repair and fallback flows. It has a separate config file and may use a different provider, API key, base URL, and model.
-
-Create a local private config:
+### CC-MINI Runtime Repair Agent
 
 ```bash
 cp .cc-mini.example.toml .cc-mini.toml
@@ -121,38 +119,20 @@ api_key = "YOUR_CC_MINI_API_KEY"
 base_url = "https://your-openai-compatible-endpoint/v1"
 model = "your-model-name"
 use_finish_tool = true
-
-[fallback]
-enabled = false
-provider = "openai"
-api_key = "YOUR_FALLBACK_API_KEY"
-base_url = "https://your-fallback-endpoint/v1"
-model = "your-fallback-model-name"
 ```
 
-`.cc-mini.toml` is ignored by Git.
+The main translation model and the CC-MINI agent can use different providers,
+keys, base URLs, and models.
 
-## Running the Arraylist Smoke Test
+## Quick Start
 
-The smoke test uses `benchmarks/arraylist/` and writes to `Output/arraylist_smoke_current/`.
+Run the small `arraylist` smoke benchmark:
 
 ```bash
 ./scripts/smoke_test.sh
 ```
 
-## Running Other Public Benchmarks
-
-After creating `configs/config.ini` and `.cc-mini.toml`, you can run the larger public benchmark configs directly:
-
-```bash
-cd Tool
-./run.sh ../configs/config_c_algorithm.ini
-./run.sh ../configs/config_crown.ini
-```
-
-These runs are larger than the default smoke test and may require more model calls and runtime repair iterations.
-
-Important outputs:
+Important output:
 
 ```text
 Output/arraylist_smoke_current/
@@ -165,39 +145,70 @@ Output/arraylist_smoke_current/
 └── tmp/
 ```
 
-`report.md` is the first file to inspect after a run. It summarizes compile/test status, retry behavior, runtime repair, and major failure categories.
+Start with `Output/arraylist_smoke_current/Output/report.md` when inspecting a
+run.
 
-## Running the Tool Directly
+## Larger Benchmarks
 
-From the repository root:
-
-```bash
-cd Tool
-./run.sh ../configs/config.ini
-```
-
-The default `Tool/run.sh` config is also `../configs/config.ini`, so this is equivalent after local config setup:
+After setting `configs/config.ini` and `.cc-mini.toml`, run:
 
 ```bash
 cd Tool
-./run.sh
+./run.sh ../configs/config_c_algorithm.ini
+./run.sh ../configs/config_crown.ini
 ```
 
-## Notes on Correctness
+These benchmarks are larger than the smoke test and may require more LLM calls
+and repair rounds.
 
-The current pipeline validates generated Rust with Cargo compilation, runtime tests, round-trip checks, and optional CC-MINI repair. This is practical validation, not a formal proof of semantic equivalence.
+## Reproducing Paper-Style Experiments
 
-Generated Rust is usually safe and test-oriented, but it may remain C-shaped rather than fully idiomatic Rust. Idiomatic Rustification is a separate optimization layer.
+The public repository contains the core pipeline and public benchmarks. The
+paper reports results on C-Algorithm and Crown, including:
 
-## Secret Handling
+- 98.4% compilation success
+- 42.6% execution correctness
+- 100.0% safe lines-of-code coverage
+- 95.8% safe reference ratio
 
-Before publishing a fork or public snapshot:
+Because the pipeline uses LLMs, exact outputs may vary across providers, model
+versions, and API stability. The current release is intended to make the
+workflow executable and inspectable; paper-level archived artifacts are linked
+through the artifact DOI above.
 
-```bash
-rg -n --hidden "sk-|api_key|password|Bearer|token" .
+## Notes
+
+- MinsC2Rust targets project-level migration rather than isolated snippet translation.
+- The current workflow is static-first: it prioritizes compiler-guided buildability and safety.
+- Runtime tests and CC-MINI repair are used as practical validation and repair aids, not as formal semantic proof.
+- Generated Rust may remain C-shaped in places; idiomatic Rustification is a separate step.
+
+## Citation
+
+If you use MinsC2Rust in research, please cite the paper:
+
+```bibtex
+@article{kang2026minsc2rust,
+  title   = {MinsC2Rust: LLM-driven project-level code migration from C to safe Rust},
+  author  = {Kang, Zhehao and Zhu, Qianyu and Mou, Wenrui and Wang, Bang and Zhang, Xiaogang and Huang, Haojun},
+  journal = {Empirical Software Engineering},
+  year    = {2026},
+  doi     = {10.1007/s10664-026-10905-4},
+  url     = {https://doi.org/10.1007/s10664-026-10905-4}
+}
 ```
 
-Rotate any API key that was ever committed to Git history. If you publish an existing repository history, clean it with a history rewriting tool such as `git-filter-repo`. A safer option is to publish a new clean repository snapshot.
+Please also cite the released artifact when referring to this code package:
+
+```bibtex
+@software{kang2026minsc2rust_artifact,
+  title  = {MinsC2Rust: LLM-Driven Project-Level Code Migration from C to Safe Rust},
+  author = {Kang, Zhehao and Zhu, Qianyu and Mou, Wenrui and Wang, Bang and Zhang, Xiaogang and Huang, Haojun},
+  year   = {2026},
+  doi    = {10.5281/zenodo.17651630},
+  url    = {https://doi.org/10.5281/zenodo.17651630}
+}
+```
 
 ## License
 
