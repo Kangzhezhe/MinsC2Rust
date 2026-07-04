@@ -99,6 +99,7 @@ paths=(
   Tool/clean.py
   Tool/decompose.sh
   Tool/fake_libc_include
+  Tool/func_result
   Tool/rust_ast_project
   Tool/test_project
   Tool/run.sh
