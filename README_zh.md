@@ -168,6 +168,10 @@ cd Tool
 
 由于流程依赖 LLM，不同 provider、模型版本和 API 稳定性会导致输出存在差异。当前公开仓库主要用于让流程可运行、可检查；论文级归档工件见上方 artifact DOI。
 
+对于仓库内置的 `arraylist` smoke benchmark，启用 source-level runtime repair 和
+CC-MINI agent 后，可以生成 `cargo test --quiet` 全部通过的 Rust 导出工程。
+这个 smoke 结果是公开流程的端到端可运行性检查，不替代上面论文级 benchmark 指标。
+
 ## 说明
 
 - MinsC2Rust 面向项目级迁移，而不是孤立代码片段翻译。

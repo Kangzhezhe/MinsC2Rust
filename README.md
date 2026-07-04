@@ -176,6 +176,13 @@ versions, and API stability. The current release is intended to make the
 workflow executable and inspectable; paper-level archived artifacts are linked
 through the artifact DOI above.
 
+For the included `arraylist` smoke benchmark, enabling source-level runtime
+repair with the CC-MINI agent can produce a fully passing exported Rust project:
+the reproducibility check runs `cargo test --quiet` on the reconstructed project
+and expects all tests to pass. This smoke result is a practical end-to-end check
+of the public pipeline, not a replacement for the paper-level benchmark results
+above.
+
 ## Notes
 
 - MinsC2Rust targets project-level migration rather than isolated snippet translation.
