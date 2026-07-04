@@ -1,0 +1,8 @@
+Convert the following C function(s) to Rust function(s). Return code only.
+Target function(s): arraylist_new,
+C source:
+[C 文件] arraylist.c (source=arraylist)
+- 函数: arraylist_new [file=arraylist.c source=arraylist]
+```c
+int arraylist_new(void) { return 1; }
+```

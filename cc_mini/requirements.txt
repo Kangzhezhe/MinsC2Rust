@@ -1,0 +1,8 @@
+anthropic
+httpx
+openai
+prompt_toolkit
+pydantic
+python-dotenv
+rich
+tomli

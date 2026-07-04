@@ -1,0 +1,49 @@
+{
+  "alloc-testing": {
+    "alloc_test_set_limit": 0,
+    "alloc_test_get_allocated": 0,
+    "alloc_test_overwrite": 0,
+    "alloc_test_get_header": 0,
+    "alloc_test_free": 0,
+    "alloc_test_malloc": 0,
+    "alloc_test_realloc": 1,
+    "alloc_test_strdup": 0,
+    "alloc_test_calloc": 0
+  },
+  "test-alloc-testing": {
+    "test_malloc_free": 1,
+    "test_limits": 7,
+    "test_realloc": 1,
+    "test_strdup": 1,
+    "test_calloc": 0
+  },
+  "arraylist": {
+    "arraylist_free": 1,
+    "arraylist_new": 0,
+    "arraylist_remove_range": 0,
+    "arraylist_enlarge": 0,
+    "arraylist_clear": 0,
+    "arraylist_index_of": 0,
+    "arraylist_sort_internal": 0,
+    "arraylist_insert": 1,
+    "arraylist_remove": 0,
+    "arraylist_sort": 0,
+    "arraylist_append": 0,
+    "arraylist_prepend": 0
+  },
+  "compare-int": {
+    "int_compare": 0,
+    "int_equal": 0
+  },
+  "test-arraylist": {
+    "test_arraylist_new_free": 0,
+    "generate_arraylist": 0,
+    "test_arraylist_sort": 7,
+    "test_arraylist_index_of": 1,
+    "test_arraylist_prepend": 7,
+    "test_arraylist_append": 0,
+    "test_arraylist_clear": 1,
+    "test_arraylist_remove_range": 0,
+    "test_arraylist_remove": 2
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "alloc-testing": {
+    "extra": "// legacy non-function content\n",
+    "alloc_test_set_limit": "pub fn alloc_test_set_limit() {}\n",
+    "alloc_test_get_allocated": "pub fn alloc_test_get_allocated() {}\n",
+    "alloc_test_reset": "pub fn alloc_test_reset() {}\n",
+    "alloc_test_overwrite": "pub fn alloc_test_overwrite() {}\n",
+    "alloc_test_get_header": "pub fn alloc_test_get_header() {}\n",
+    "alloc_test_free": "pub fn alloc_test_free() {}\n",
+    "alloc_test_malloc": "pub fn alloc_test_malloc() {}\n",
+    "alloc_test_realloc": "pub fn alloc_test_realloc() {}\n",
+    "alloc_test_strdup": "pub fn alloc_test_strdup() {}\n",
+    "alloc_test_calloc": "pub fn alloc_test_calloc() {}\n"
+  },
+  "test-alloc-testing": {
+    "extra": "// legacy non-function content\n",
+    "test_malloc_free": "pub fn test_malloc_free() {}\n",
+    "test_limits": "pub fn test_limits() {}\n",
+    "test_realloc": "pub fn test_realloc() {}\n",
+    "test_strdup": "pub fn test_strdup() {}\n",
+    "test_calloc": "pub fn test_calloc() {}\n"
+  },
+  "arraylist": {
+    "extra": "// legacy non-function content\n",
+    "arraylist_free": "pub fn arraylist_free() {}\n",
+    "arraylist_new": "pub fn arraylist_new() {}\n",
+    "arraylist_remove_range": "pub fn arraylist_remove_range() {}\n",
+    "arraylist_enlarge": "pub fn arraylist_enlarge() {}\n",
+    "arraylist_clear": "pub fn arraylist_clear() {}\n",
+    "arraylist_index_of": "pub fn arraylist_index_of() {}\n",
+    "arraylist_sort_internal": "pub fn arraylist_sort_internal() {}\n",
+    "arraylist_insert": "pub fn arraylist_insert() {}\n",
+    "arraylist_remove": "pub fn arraylist_remove() {}\n",
+    "arraylist_sort": "pub fn arraylist_sort() {}\n",
+    "arraylist_append": "pub fn arraylist_append() {}\n",
+    "arraylist_prepend": "pub fn arraylist_prepend() {}\n"
+  },
+  "compare-int": {
+    "int_compare": "pub fn int_compare() {}\n",
+    "int_equal": "pub fn int_equal() {}\n"
+  },
+  "test-arraylist": {
+    "extra": "// legacy non-function content\n",
+    "get_value_at_index": "pub fn get_value_at_index() {}\n",
+    "test_arraylist_new_free": "pub fn test_arraylist_new_free() {}\n",
+    "generate_arraylist": "pub fn generate_arraylist() {}\n",
+    "test_arraylist_sort": "pub fn test_arraylist_sort() {}\n",
+    "test_arraylist_index_of": "pub fn test_arraylist_index_of() {}\n",
+    "test_arraylist_prepend": "pub fn test_arraylist_prepend() {}\n",
+    "test_arraylist_append": "pub fn test_arraylist_append() {}\n",
+    "test_arraylist_clear": "pub fn test_arraylist_clear() {}\n",
+    "test_arraylist_remove_range": "pub fn test_arraylist_remove_range() {}\n",
+    "test_arraylist_remove": "pub fn test_arraylist_remove() {}\n"
+  }
+}

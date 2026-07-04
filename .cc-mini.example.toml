@@ -1,0 +1,21 @@
+provider = "openai"
+stream = false
+
+[openai]
+api_key = "YOUR_CC_MINI_API_KEY"
+base_url = "https://your-openai-compatible-endpoint/v1"
+model = "your-model-name"
+use_finish_tool = true
+
+[thinking]
+enabled = true
+
+[fallback]
+enabled = false
+provider = "openai"
+api_key = "YOUR_FALLBACK_API_KEY"
+base_url = "https://your-fallback-endpoint/v1"
+model = "your-fallback-model-name"
+
+[fallback.thinking]
+enabled = false

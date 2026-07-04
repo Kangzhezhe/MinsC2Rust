@@ -1,0 +1,50 @@
+[
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/adt.dir/src/arraylist.c.o -c /app/benchmarks/arraylist/src/arraylist.c",
+  "file": "/app/benchmarks/arraylist/src/arraylist.c",
+  "output": "CMakeFiles/adt.dir/src/arraylist.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/adt.dir/src/compare-int.c.o -c /app/benchmarks/arraylist/src/compare-int.c",
+  "file": "/app/benchmarks/arraylist/src/compare-int.c",
+  "output": "CMakeFiles/adt.dir/src/compare-int.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/test-alloc-testing.dir/test/test-alloc-testing.c.o -c /app/benchmarks/arraylist/test/test-alloc-testing.c",
+  "file": "/app/benchmarks/arraylist/test/test-alloc-testing.c",
+  "output": "CMakeFiles/test-alloc-testing.dir/test/test-alloc-testing.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/test-alloc-testing.dir/test/framework.c.o -c /app/benchmarks/arraylist/test/framework.c",
+  "file": "/app/benchmarks/arraylist/test/framework.c",
+  "output": "CMakeFiles/test-alloc-testing.dir/test/framework.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/test-alloc-testing.dir/test/alloc-testing.c.o -c /app/benchmarks/arraylist/test/alloc-testing.c",
+  "file": "/app/benchmarks/arraylist/test/alloc-testing.c",
+  "output": "CMakeFiles/test-alloc-testing.dir/test/alloc-testing.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/test-arraylist.dir/test/test-arraylist.c.o -c /app/benchmarks/arraylist/test/test-arraylist.c",
+  "file": "/app/benchmarks/arraylist/test/test-arraylist.c",
+  "output": "CMakeFiles/test-arraylist.dir/test/test-arraylist.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/test-arraylist.dir/test/framework.c.o -c /app/benchmarks/arraylist/test/framework.c",
+  "file": "/app/benchmarks/arraylist/test/framework.c",
+  "output": "CMakeFiles/test-arraylist.dir/test/framework.c.o"
+},
+{
+  "directory": "/app/benchmarks/arraylist/build",
+  "command": "/usr/bin/cc -DALLOC_TESTING -I/app/benchmarks/arraylist/src -I/app/benchmarks/arraylist/test  -o CMakeFiles/test-arraylist.dir/test/alloc-testing.c.o -c /app/benchmarks/arraylist/test/alloc-testing.c",
+  "file": "/app/benchmarks/arraylist/test/alloc-testing.c",
+  "output": "CMakeFiles/test-arraylist.dir/test/alloc-testing.c.o"
+}
+]
